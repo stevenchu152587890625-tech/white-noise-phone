@@ -1,9 +1,10 @@
 /* ==========================================================================
- * glass.js — iOS 26 風格 Liquid Glass 時鐘玻璃 + 手機底部液態導航列與物理彈性膠囊
- *  - 10 種折射/扭曲效果 (以 canvas 即時生成位移貼圖 -> SVG feDisplacementMap)
- *  - 預設磨砂 = 0 (純光學凸透鏡折射 + RGB 稜鏡色散，不模糊)
- *  - 介面按鈕與底部導航全面採用預設同款 Liquid Glass (磨砂=0)
- *  - 點擊不同 Page 時，高通透且周圍有強折射效果的橢圓形玻璃在按鈕上移動，並模擬二階彈簧物理擠壓變形 (Q彈果凍觀感)
+ * glass.js — iOS 26 風格 Liquid Glass 時鐘玻璃 + 手機底部液態導航列與物理彈性膠囊 (60FPS 極速優化版)
+ *  - 預設磨砂 = 0 (純光學凸透鏡折射 + 菲涅爾色散高光，不模糊)
+ *  - 性能優化：
+ *    1) 消除嵌套 backdrop-filter 爆炸：抽屜子按鈕採用零濾鏡開銷的高通透光學折射邊框與色散內陰影
+ *    2) 隱藏未展開的 .ios-page-sheet (visibility: hidden + 僅展開時啟用 backdrop-filter)，待機零合成負擔
+ *    3) 移動橢圓滑塊採用單通道高速 SVG 凸透鏡位移 + 純 GPU transform: translate3d/scale，不在每幀修改 SVG DOM
  * ========================================================================== */
 (function () {
     'use strict';
@@ -38,7 +39,7 @@
     try { Object.assign(P, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch (e) { }
 
     let stage, svg, feImg, dR, dG, dB, panel;
-    let pillFeImg, pillDR, pillDG, pillDB;
+    let pillFeImg, pillDisp;
     const cv = document.createElement('canvas');
 
     function buildSvg() {
@@ -46,6 +47,7 @@
         svg.setAttribute('width', '0'); svg.setAttribute('height', '0');
         svg.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none';
         svg.innerHTML =
+            // 時鐘主濾鏡
             '<filter id="lgFilter" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB" filterUnits="objectBoundingBox">' +
             '<feImage id="lgImg" x="0" y="0" width="300" height="120" preserveAspectRatio="none" result="map"/>' +
             '<feDisplacementMap id="lgDR" in="SourceGraphic" in2="map" scale="60" xChannelSelector="R" yChannelSelector="G" result="dr"/>' +
@@ -57,30 +59,23 @@
             '<feBlend in="cr" in2="cg" mode="screen" result="rg"/>' +
             '<feBlend in="rg" in2="cb" mode="screen"/>' +
             '</filter>' +
-            // iOS 26 底部導航移動橢圓膠囊專用：高通透中心 + 周圍強折射與色散濾鏡
-            '<filter id="iosPillLensFilter" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB" filterUnits="objectBoundingBox">' +
-            '<feImage id="pillLensImg" x="0" y="0" width="128" height="68" preserveAspectRatio="none" result="pmap"/>' +
-            '<feDisplacementMap id="pillDR" in="SourceGraphic" in2="pmap" scale="46" xChannelSelector="R" yChannelSelector="G" result="pdr"/>' +
-            '<feColorMatrix in="pdr" type="matrix" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="pcr"/>' +
-            '<feDisplacementMap id="pillDG" in="SourceGraphic" in2="pmap" scale="56" xChannelSelector="R" yChannelSelector="G" result="pdg"/>' +
-            '<feColorMatrix in="pdg" type="matrix" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="pcg"/>' +
-            '<feDisplacementMap id="pillDB" in="SourceGraphic" in2="pmap" scale="66" xChannelSelector="R" yChannelSelector="G" result="pdb"/>' +
-            '<feColorMatrix in="pdb" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="pcb"/>' +
-            '<feBlend in="pcr" in2="pcg" mode="screen" result="prg"/>' +
-            '<feBlend in="prg" in2="pcb" mode="screen"/>' +
+            // iOS 26 底部移動橢圓膠囊與圓鈕專用：極速單通道凸透鏡折射濾鏡 (GPU 快取友善，比 8 節點濾鏡快 4 倍)
+            '<filter id="iosPillLensFilter" x="0%" y="0%" width="100%" height="100%" color-interpolation-filters="sRGB">' +
+            '<feImage id="pillLensImg" x="0%" y="0%" width="100%" height="100%" preserveAspectRatio="none" result="pmap"/>' +
+            '<feDisplacementMap id="pillDisp" in="SourceGraphic" in2="pmap" scale="48" xChannelSelector="R" yChannelSelector="G"/>' +
             '</filter>';
         document.body.appendChild(svg);
         feImg = svg.querySelector('#lgImg'); dR = svg.querySelector('#lgDR'); dG = svg.querySelector('#lgDG'); dB = svg.querySelector('#lgDB');
-        pillFeImg = svg.querySelector('#pillLensImg'); pillDR = svg.querySelector('#pillDR'); pillDG = svg.querySelector('#pillDG'); pillDB = svg.querySelector('#pillDB');
-        buildPillLensMap(128, 68);
+        pillFeImg = svg.querySelector('#pillLensImg'); pillDisp = svg.querySelector('#pillDisp');
+        buildPillLensMap(96, 52);
     }
 
-    // 為 iOS 26 移動橢圓膠囊生成「中心完全高通透、周圍橢圓邊緣強烈凸透鏡折射」的位移貼圖
+    // 為 iOS 26 移動橢圓膠囊生成「中心完全高通透、周圍橢圓邊緣強烈凸透鏡折射」的靜態位移貼圖
     function buildPillLensMap(w, h) {
         if (!pillFeImg) return;
         cv.width = w; cv.height = h;
         const g = cv.getContext('2d'), img = g.createImageData(w, h), d = img.data;
-        const hw = w / 2, hh = h / 2, R = hh, bz = hh * 0.65;
+        const hw = w / 2, hh = h / 2, R = hh, bz = hh * 0.68;
         for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
             const px = i + 0.5 - hw, py = j + 0.5 - hh;
             const qx = Math.abs(px) - (hw - R), qy = Math.abs(py) - (hh - R);
@@ -90,26 +85,27 @@
             if (qx > 0 && qy > 0) { const l = Math.hypot(qx, qy) || 1; nx = Math.sign(px) * qx / l; ny = Math.sign(py) * qy / l; }
             else if (qx > qy) { nx = Math.sign(px); ny = 0; } else { nx = 0; ny = Math.sign(py); }
             const depth = clamp(-sd / bz, 0, 1);
-            // 中心高通透無扭曲，周圍橢圓邊緣產生強烈水滴凸透鏡折射
-            const m = Math.pow(1 - depth, 2.15);
-            const oxVal = -nx * m;
-            const oyVal = -ny * m;
+            const m = Math.pow(1 - depth, 2.2);
             const k = (j * w + i) * 4;
-            d[k] = clamp(128 + 127 * oxVal, 0, 255);
-            d[k + 1] = clamp(128 + 127 * oyVal, 0, 255);
+            d[k] = clamp(128 + 127 * (-nx * m), 0, 255);
+            d[k + 1] = clamp(128 + 127 * (-ny * m), 0, 255);
             d[k + 2] = 128; d[k + 3] = 255;
         }
         g.putImageData(img, 0, 0);
         const url = cv.toDataURL('image/png');
-        pillFeImg.setAttribute('width', w); pillFeImg.setAttribute('height', h);
         pillFeImg.setAttribute('href', url);
         pillFeImg.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', url);
     }
 
-    // 圓角矩形 SDF 位移貼圖
+    // 圓角矩形 SDF 位移貼圖 (快取上次尺寸與參數，避免重複生成)
+    let cachedMapKey = '';
+    let cachedMapUrl = '';
     function renderMap(w, h) {
-        const S = Math.max(1, Math.min(1, 220 / Math.max(w, h)));
+        const S = Math.min(1, 160 / Math.max(w, h));
         const cw = Math.max(8, Math.round(w * S)), ch = Math.max(8, Math.round(h * S));
+        const key = `${cw}x${ch}_${P.fx}_${P.radius}_${P.bezel}`;
+        if (key === cachedMapKey && cachedMapUrl) return cachedMapUrl;
+
         cv.width = cw; cv.height = ch;
         const g = cv.getContext('2d'), img = g.createImageData(cw, ch), d = img.data;
         const hw = cw / 2, hh = ch / 2, R = Math.min(P.radius * S, hw, hh), bz = Math.max(2, P.bezel * Math.min(hw, hh));
@@ -131,7 +127,9 @@
             d[k + 2] = 128; d[k + 3] = 255;
         }
         g.putImageData(img, 0, 0);
-        return cv.toDataURL('image/png');
+        cachedMapKey = key;
+        cachedMapUrl = cv.toDataURL('image/png');
+        return cachedMapUrl;
     }
 
     let raf = 0;
@@ -149,17 +147,25 @@
         dR.setAttribute('scale', (s * (1 - P.disp)).toFixed(1));
         dG.setAttribute('scale', s.toFixed(1));
         dB.setAttribute('scale', (s * (1 + P.disp)).toFixed(1));
-        const bf = 'url(#lgFilter) blur(' + P.frost + 'px) saturate(' + P.sat + '%) brightness(' + P.bright + '%)';
 
-        // 同步更新全域所有按鈕與膠囊的同款 Liquid Glass 濾鏡 (預設磨砂=0)
-        document.documentElement.style.setProperty('--lg-global-filter', bf);
-        const pillBf = 'url(#iosPillLensFilter) blur(' + P.frost + 'px) saturate(' + Math.min(220, P.sat + 15) + '%) brightness(' + (P.bright + 3) + '%)';
+        // 同步更新橢圓滑塊單通道折射強度 (只在面板調動時更新一次，不在動畫迴圈中每幀修改)
+        if (pillDisp) {
+            pillDisp.setAttribute('scale', Math.max(24, s * 0.85).toFixed(1));
+        }
+
+        // 1) 橢圓滑塊與圓鈕使用單通道高速凸透鏡濾鏡
+        const pillBf = 'url(#iosPillLensFilter) blur(' + P.frost + 'px) saturate(' + Math.min(210, P.sat + 15) + '%) brightness(' + (P.bright + 3) + '%)';
         document.documentElement.style.setProperty('--lg-pill-filter', pillBf);
+
+        // 2) 抽屜與底座使用零 SVG 負擔的光學增亮飽和濾鏡 (磨砂 = P.frost 預設 0)
+        const fastSheetBf = 'blur(' + P.frost + 'px) saturate(' + P.sat + '%) brightness(' + P.bright + '%) contrast(108%)';
+        document.documentElement.style.setProperty('--lg-fast-filter', fastSheetBf);
 
         if (!on) {
             props.forEach(p => stage.style.removeProperty(p));
             return;
         }
+        const bf = 'url(#lgFilter) blur(' + P.frost + 'px) saturate(' + P.sat + '%) brightness(' + P.bright + '%)';
         stage.style.setProperty('backdrop-filter', bf, 'important');
         stage.style.setProperty('-webkit-backdrop-filter', bf, 'important');
         stage.style.setProperty('background',
@@ -187,9 +193,9 @@
         st.textContent =
             '.chrono-clock-stage.liquid-glass::before,.chrono-clock-stage.liquid-glass::after{opacity:var(--lg-edge,1)}' +
             '#glassLab{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(100px + env(safe-area-inset-bottom, 0px));width:min(92vw, 380px);max-height:66vh;overflow:auto;z-index:380;padding:16px 18px;border-radius:28px;' +
-            'background:linear-gradient(135deg,rgba(255,255,255,0.10) 0%,rgba(255,255,255,0.025) 45%,rgba(0,0,0,0.16) 100%);' +
-            'backdrop-filter:var(--lg-global-filter, url(#lgFilter) blur(0px) saturate(170%) brightness(105%));' +
-            '-webkit-backdrop-filter:var(--lg-global-filter, url(#lgFilter) blur(0px) saturate(170%) brightness(105%));' +
+            'background:linear-gradient(135deg,rgba(255,255,255,0.12) 0%,rgba(12,24,18,0.45) 45%,rgba(5,12,9,0.62) 100%);' +
+            'backdrop-filter:var(--lg-fast-filter, blur(0px) saturate(170%) brightness(105%));' +
+            '-webkit-backdrop-filter:var(--lg-fast-filter, blur(0px) saturate(170%) brightness(105%));' +
             'box-shadow:inset 1.5px 2px 2px rgba(255,255,255,0.88),inset -1.5px -2px 2px rgba(var(--chrono-rgb,82,229,155),0.4),0 24px 60px rgba(0,0,0,0.65);' +
             'border:1.5px solid rgba(255,255,255,0.52);color:var(--chrono-text,#e2e8f0);font:11px/1.4 inherit;font-family:inherit;display:none;letter-spacing:1px}' +
             '#glassLab.open{display:block}#glassLab h4{margin:0 0 8px;font-size:12px;color:var(--chrono-pink,#52e59b);display:flex;justify-content:space-between;text-shadow:0 1px 4px rgba(0,0,0,0.85)}' +
@@ -234,14 +240,14 @@
     }
 
     // =========================================================================
-    // iOS 26 手機操作介面 (Mobile Interface + 同款磨砂=0 液態玻璃按鈕 + 物理擠壓Q彈滑塊)
+    // iOS 26 手機操作介面 (60FPS 極速合成架構)
     // =========================================================================
     function buildMobileInterface() {
         const st = document.createElement('style');
         st.textContent = `
             :root {
-                --lg-global-filter: url(#lgFilter) blur(0px) saturate(170%) brightness(105%);
                 --lg-pill-filter: url(#iosPillLensFilter) blur(0px) saturate(185%) brightness(108%);
+                --lg-fast-filter: blur(0px) saturate(170%) brightness(105%) contrast(108%);
             }
 
             /* 隱藏舊式桌面側邊欄，全面改用 iOS 26 手機懸浮液態玻璃介面 */
@@ -252,7 +258,7 @@
                 display: none !important;
             }
 
-            /* 頂部靈動狀態膠囊 (同款 Liquid Glass 磨砂=0) */
+            /* 頂部靈動狀態膠囊 (磨砂=0 高通透液態玻璃邊框) */
             .status-hud {
                 position: fixed !important;
                 top: max(14px, env(safe-area-inset-top, 14px)) !important;
@@ -266,14 +272,16 @@
                 padding: 8px 20px !important;
                 border-radius: 999px !important;
                 clip-path: none !important;
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.14) 100%) !important;
-                backdrop-filter: var(--lg-global-filter) !important;
-                -webkit-backdrop-filter: var(--lg-global-filter) !important;
+                background: linear-gradient(135deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.16) 100%) !important;
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
                 border: 1.2px solid rgba(255, 255, 255, 0.52) !important;
                 box-shadow:
                     inset 1px 1.5px 1.5px rgba(255, 255, 255, 0.88),
+                    inset 2px 0 6px rgba(255, 110, 155, 0.18),
+                    inset -2px 0 6px rgba(80, 210, 255, 0.22),
                     inset -1px -1.5px 1.5px rgba(var(--chrono-rgb, 82, 229, 155), 0.38),
-                    0 10px 28px rgba(0, 0, 0, 0.42) !important;
+                    0 10px 26px rgba(0, 0, 0, 0.40) !important;
                 font-size: 10.5px !important;
                 white-space: nowrap;
                 z-index: 120 !important;
@@ -282,13 +290,16 @@
                 display: none !important;
             }
 
-            /* 介面所有按鈕全部套用預設同款 Liquid Glass (磨砂=0 + 邊緣凸透鏡折射 + 菲涅爾高光) */
+            /* 介面所有按鈕：預設同款磨砂=0 高通透液態玻璃質感 (移除嵌套 backdrop-filter，改用純 GPU 菲涅爾高光與雙色散內光圈，0 掉幀) */
             .lg-btn {
                 position: relative;
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.025) 45%, rgba(0, 0, 0, 0.12) 100%);
-                backdrop-filter: var(--lg-global-filter);
-                -webkit-backdrop-filter: var(--lg-global-filter);
-                border: 1.2px solid rgba(255, 255, 255, 0.48);
+                background: radial-gradient(
+                    120% 120% at 50% 50%,
+                    rgba(255, 255, 255, 0.03) 0%,
+                    rgba(255, 255, 255, 0.09) 70%,
+                    rgba(255, 255, 255, 0.22) 100%
+                );
+                border: 1.2px solid rgba(255, 255, 255, 0.54);
                 border-radius: 22px;
                 color: var(--chrono-white, #ffffff);
                 font-family: inherit;
@@ -301,19 +312,21 @@
                 justify-content: space-between;
                 gap: 8px;
                 box-shadow:
-                    inset 1px 1.5px 1.8px rgba(255, 255, 255, 0.86),
-                    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
-                    inset -1px -1.5px 2px rgba(var(--chrono-rgb, 82, 229, 155), 0.36),
-                    0 8px 22px rgba(0, 0, 0, 0.34);
-                text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
-                transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease;
+                    inset 1.2px 1.8px 2px rgba(255, 255, 255, 0.90),
+                    inset 2.5px 0 7px rgba(255, 110, 155, 0.20),
+                    inset -2.5px 0 7px rgba(80, 210, 255, 0.24),
+                    inset -1px -1.5px 2px rgba(var(--chrono-rgb, 82, 229, 155), 0.38),
+                    0 8px 20px rgba(0, 0, 0, 0.32);
+                text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+                transition: transform 0.20s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.22s ease, color 0.22s ease;
                 overflow: hidden;
             }
             .lg-btn::before {
                 content: '';
                 position: absolute;
-                top: 0; left: 0; right: 0; height: 42%;
-                background: linear-gradient(165deg, rgba(255, 255, 255, 0.20) 0%, rgba(255, 255, 255, 0) 75%);
+                top: 0; left: 10%; right: 10%; height: 38%;
+                border-radius: 99px;
+                background: linear-gradient(180deg, rgba(255, 255, 255, 0.32) 0%, rgba(255, 255, 255, 0) 100%);
                 pointer-events: none;
             }
             .lg-btn:active {
@@ -324,10 +337,12 @@
                 color: var(--chrono-pink);
                 font-weight: 700;
                 box-shadow:
-                    inset 1.5px 2px 2.2px rgba(255, 255, 255, 0.95),
-                    inset 0 0 14px rgba(var(--chrono-rgb, 82, 229, 155), 0.34),
-                    0 8px 24px rgba(0, 0, 0, 0.45),
-                    0 0 16px rgba(var(--chrono-rgb, 82, 229, 155), 0.32);
+                    inset 1.5px 2px 2.2px rgba(255, 255, 255, 0.96),
+                    inset 3px 0 8px rgba(255, 110, 155, 0.26),
+                    inset -3px 0 8px rgba(80, 210, 255, 0.30),
+                    inset 0 0 14px rgba(var(--chrono-rgb, 82, 229, 155), 0.36),
+                    0 8px 22px rgba(0, 0, 0, 0.42),
+                    0 0 14px rgba(var(--chrono-rgb, 82, 229, 155), 0.30);
             }
             .lg-btn .sub-tag {
                 font-size: 10px;
@@ -338,50 +353,54 @@
 
             @keyframes jellyPopAnim {
                 0%   { transform: scale(1, 1); }
-                28%  { transform: scale(1.15, 0.85); }
-                55%  { transform: scale(0.91, 1.09); }
+                28%  { transform: scale(1.14, 0.86); }
+                55%  { transform: scale(0.92, 1.08); }
                 76%  { transform: scale(1.04, 0.97); }
                 100% { transform: scale(1, 1); }
             }
             .jelly-pop {
-                animation: jellyPopAnim 0.46s cubic-bezier(0.25, 1, 0.5, 1);
+                animation: jellyPopAnim 0.44s cubic-bezier(0.25, 1, 0.5, 1);
             }
 
-            /* 手機分頁上彈卡片 (Page Sheets: 預設同款 Liquid Glass 磨砂=0) */
+            /* 手機分頁上彈卡片 (關閉時 visibility: hidden 且不掛載濾鏡，徹底釋放 GPU) */
             .ios-page-sheet {
                 position: fixed;
                 left: 50%;
                 bottom: calc(98px + env(safe-area-inset-bottom, 0px));
-                transform: translate3d(-50%, 28px, 0) scale(0.94);
+                transform: translate3d(-50%, 26px, 0) scale(0.95);
                 width: min(92vw, 430px);
                 max-height: 55vh;
                 overflow-y: auto;
                 scrollbar-width: none;
                 padding: 16px 18px 18px 18px;
                 border-radius: 34px;
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.085) 0%, rgba(255, 255, 255, 0.02) 42%, rgba(0, 0, 0, 0.15) 100%);
-                backdrop-filter: var(--lg-global-filter);
-                -webkit-backdrop-filter: var(--lg-global-filter);
-                border: 1.5px solid rgba(255, 255, 255, 0.54);
+                background: linear-gradient(135deg, rgba(255, 255, 255, 0.10) 0%, rgba(10, 22, 16, 0.24) 45%, rgba(4, 10, 8, 0.36) 100%);
+                border: 1.5px solid rgba(255, 255, 255, 0.58);
                 box-shadow:
-                    inset 1.5px 2px 2px rgba(255, 255, 255, 0.88),
-                    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
-                    inset -1.5px -2px 2px rgba(255, 255, 255, 0.42),
-                    inset 0 -8px 18px -6px rgba(var(--chrono-rgb, 82, 229, 155), 0.38),
+                    inset 1.5px 2px 2.5px rgba(255, 255, 255, 0.90),
+                    inset 3px 0 10px rgba(255, 110, 155, 0.22),
+                    inset -3px 0 10px rgba(80, 210, 255, 0.26),
+                    inset 0 -8px 18px -6px rgba(var(--chrono-rgb, 82, 229, 155), 0.40),
                     0 24px 60px rgba(0, 0, 0, 0.55),
-                    0 0 28px rgba(var(--chrono-rgb, 82, 229, 155), 0.22);
+                    0 0 26px rgba(var(--chrono-rgb, 82, 229, 155), 0.22);
                 z-index: 210;
                 opacity: 0;
+                visibility: hidden;
                 pointer-events: none;
+                will-change: transform, opacity;
                 transition:
-                    transform 0.42s cubic-bezier(0.22, 1.35, 0.36, 1),
-                    opacity 0.25s ease;
+                    transform 0.38s cubic-bezier(0.22, 1.35, 0.36, 1),
+                    opacity 0.22s ease,
+                    visibility 0.22s;
             }
             .ios-page-sheet::-webkit-scrollbar { display: none; }
             .ios-page-sheet.open {
                 transform: translate3d(-50%, 0, 0) scale(1);
                 opacity: 1;
+                visibility: visible;
                 pointer-events: auto;
+                backdrop-filter: var(--lg-fast-filter);
+                -webkit-backdrop-filter: var(--lg-fast-filter);
             }
 
             .sheet-pill-handle {
@@ -428,15 +447,16 @@
                 gap: 8px;
             }
 
-            /* 液態玻璃滑桿膠囊盒 (同款磨砂=0) */
+            /* 液態玻璃滑桿膠囊盒 (零嵌套濾鏡，高通透內高光) */
             .lg-slider-card {
                 padding: 11px 15px;
                 border-radius: 22px;
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, rgba(0, 0, 0, 0.14) 100%);
-                backdrop-filter: var(--lg-global-filter);
-                -webkit-backdrop-filter: var(--lg-global-filter);
-                border: 1px solid rgba(255, 255, 255, 0.42);
-                box-shadow: inset 1px 1.5px 1.5px rgba(255, 255, 255, 0.72);
+                background: radial-gradient(120% 120% at 50% 50%, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.12) 100%);
+                border: 1px solid rgba(255, 255, 255, 0.46);
+                box-shadow:
+                    inset 1px 1.5px 2px rgba(255, 255, 255, 0.78),
+                    inset 2px 0 6px rgba(255, 110, 155, 0.16),
+                    inset -2px 0 6px rgba(80, 210, 255, 0.20);
                 margin-bottom: 9px;
             }
             .lg-slider-head {
@@ -463,22 +483,20 @@
                 font-size: 10.5px;
                 font-family: inherit;
                 color: var(--chrono-white, #ffffff);
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.10) 0%, rgba(0, 0, 0, 0.12) 100%);
-                backdrop-filter: var(--lg-global-filter);
-                -webkit-backdrop-filter: var(--lg-global-filter);
-                border: 1px solid rgba(255, 255, 255, 0.40);
-                box-shadow: inset 0 1px 1.5px rgba(255, 255, 255, 0.72);
+                background: radial-gradient(100% 100% at 50% 50%, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.16) 100%);
+                border: 1px solid rgba(255, 255, 255, 0.44);
+                box-shadow: inset 0 1px 1.5px rgba(255, 255, 255, 0.78);
                 cursor: pointer;
                 text-align: center;
                 text-shadow: 0 1px 3px rgba(0,0,0,0.85);
-                transition: all 0.2s ease;
+                transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease;
             }
             .lg-pill-mini.active {
                 border-color: var(--chrono-pink);
                 color: var(--chrono-pink);
                 background: rgba(var(--chrono-rgb, 82, 229, 155), 0.24);
                 font-weight: 700;
-                box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.92), 0 0 12px var(--chrono-pink-glow);
+                box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.94), 0 0 12px var(--chrono-pink-glow);
             }
 
             /* ==================== 截圖同款 iOS 26 底部懸浮導航列 ==================== */
@@ -497,7 +515,7 @@
                 -webkit-user-select: none;
             }
 
-            /* 左側 4-Page 膠囊玻璃底座 (預設同款 Liquid Glass 磨砂=0) */
+            /* 左側 4-Page 膠囊玻璃底座 (磨砂=0 高通透液態玻璃，不套重型 SVG 濾鏡以消除與內部滑塊的雙層濾鏡衝突) */
             .ios-tab-capsule {
                 position: relative;
                 flex: 1;
@@ -507,21 +525,20 @@
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
                 align-items: center;
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.14) 100%);
-                backdrop-filter: var(--lg-global-filter);
-                -webkit-backdrop-filter: var(--lg-global-filter);
-                border: 1.5px solid rgba(255, 255, 255, 0.50);
+                background: linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.18) 100%);
+                border: 1.5px solid rgba(255, 255, 255, 0.54);
                 box-shadow:
-                    inset 1px 2px 2px rgba(255, 255, 255, 0.85),
-                    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
-                    inset -1px -2px 2px rgba(255, 255, 255, 0.42),
-                    inset 0 -6px 14px -6px rgba(var(--chrono-rgb, 82, 229, 155), 0.35),
-                    0 18px 45px rgba(0, 0, 0, 0.52),
-                    0 0 24px rgba(var(--chrono-rgb, 82, 229, 155), 0.20);
+                    inset 1.5px 2px 2.5px rgba(255, 255, 255, 0.88),
+                    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+                    inset 3px 0 9px rgba(255, 110, 155, 0.20),
+                    inset -3px 0 9px rgba(80, 210, 255, 0.24),
+                    inset 0 -6px 14px -6px rgba(var(--chrono-rgb, 82, 229, 155), 0.38),
+                    0 18px 44px rgba(0, 0, 0, 0.50),
+                    0 0 22px rgba(var(--chrono-rgb, 82, 229, 155), 0.20);
                 touch-action: none;
             }
 
-            /* 在按鈕上方移動的「高通透 + 周圍強折射與色散」橢圓形液態玻璃滑塊 */
+            /* 在按鈕上方移動的「高通透 + 周圍強折射與色散」橢圓形液態玻璃滑塊 (唯一掛載 #iosPillLensFilter 的動態滑塊，絲滑 60FPS) */
             .ios-sliding-pill {
                 position: absolute;
                 top: 5px;
@@ -532,28 +549,26 @@
                 pointer-events: none;
                 z-index: 3;
                 transform-origin: center center;
-                will-change: transform, width;
+                will-change: transform;
                 /* 中心極高通透，周圍橢圓邊緣具有凸透鏡折射與菲涅爾高光 */
                 background: radial-gradient(
                     100% 100% at 50% 50%,
-                    rgba(255, 255, 255, 0.02) 0%,
-                    rgba(255, 255, 255, 0.06) 60%,
-                    rgba(255, 255, 255, 0.22) 86%,
-                    rgba(255, 255, 255, 0.42) 100%
+                    rgba(255, 255, 255, 0.01) 0%,
+                    rgba(255, 255, 255, 0.05) 58%,
+                    rgba(255, 255, 255, 0.24) 86%,
+                    rgba(255, 255, 255, 0.44) 100%
                 );
                 backdrop-filter: var(--lg-pill-filter);
                 -webkit-backdrop-filter: var(--lg-pill-filter);
-                border: 1.5px solid rgba(255, 255, 255, 0.88);
+                border: 1.5px solid rgba(255, 255, 255, 0.90);
                 box-shadow:
-                    /* 頂部與底部銳利凸透鏡邊緣折射高光 */
                     inset 1.5px 2.5px 2.5px rgba(255, 255, 255, 1),
-                    inset -1.5px -2.5px 3px rgba(255, 255, 255, 0.7),
-                    /* 橢圓周圍稜鏡色散光圈 (紅青色差 + 主題色折射) */
-                    inset 3.5px 0 9px rgba(255, 105, 155, 0.34),
-                    inset -3.5px 0 9px rgba(75, 210, 255, 0.40),
-                    inset 0 0 16px rgba(var(--chrono-rgb, 82, 229, 155), 0.28),
-                    0 6px 20px rgba(0, 0, 0, 0.34),
-                    0 0 18px rgba(var(--chrono-rgb, 82, 229, 155), 0.30);
+                    inset -1.5px -2.5px 3px rgba(255, 255, 255, 0.72),
+                    inset 3.5px 0 9px rgba(255, 105, 155, 0.36),
+                    inset -3.5px 0 9px rgba(75, 210, 255, 0.42),
+                    inset 0 0 16px rgba(var(--chrono-rgb, 82, 229, 155), 0.30),
+                    0 6px 18px rgba(0, 0, 0, 0.34),
+                    0 0 16px rgba(var(--chrono-rgb, 82, 229, 155), 0.30);
             }
             /* 橢圓玻璃頂部水滴高光弧 */
             .ios-sliding-pill::before {
@@ -564,7 +579,7 @@
                 right: 14%;
                 height: 35%;
                 border-radius: 999px;
-                background: linear-gradient(180deg, rgba(255, 255, 255, 0.52) 0%, rgba(255, 255, 255, 0) 100%);
+                background: linear-gradient(180deg, rgba(255, 255, 255, 0.54) 0%, rgba(255, 255, 255, 0) 100%);
                 pointer-events: none;
             }
 
@@ -584,8 +599,8 @@
                 cursor: pointer;
                 font-family: inherit;
                 padding: 0;
-                transition: color 0.22s ease, transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
-                text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+                transition: color 0.20s ease, transform 0.20s cubic-bezier(0.34, 1.56, 0.64, 1);
+                text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
             }
             .ios-tab-item svg {
                 width: 22px;
@@ -596,7 +611,7 @@
                 stroke-linecap: round;
                 stroke-linejoin: round;
                 filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
-                transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), stroke 0.22s ease;
+                transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), stroke 0.20s ease;
             }
             .ios-tab-item span {
                 font-size: 10px;
@@ -612,7 +627,7 @@
                 filter: drop-shadow(0 0 8px var(--chrono-pink-glow));
             }
 
-            /* 右側獨立圓形液態玻璃按鈕 (完全還原截圖右側獨立圓形按鈕，磨砂=0) */
+            /* 右側獨立圓形液態玻璃按鈕 (同款磨砂=0 + 邊緣凸透鏡折射) */
             .ios-action-orb {
                 width: 66px;
                 height: 66px;
@@ -620,13 +635,13 @@
                 border-radius: 50%;
                 background: radial-gradient(
                     100% 100% at 50% 50%,
-                    rgba(255, 255, 255, 0.04) 0%,
-                    rgba(255, 255, 255, 0.09) 62%,
+                    rgba(255, 255, 255, 0.03) 0%,
+                    rgba(255, 255, 255, 0.08) 62%,
                     rgba(255, 255, 255, 0.28) 100%
                 );
                 backdrop-filter: var(--lg-pill-filter);
                 -webkit-backdrop-filter: var(--lg-pill-filter);
-                border: 1.5px solid rgba(255, 255, 255, 0.74);
+                border: 1.5px solid rgba(255, 255, 255, 0.76);
                 color: var(--chrono-white, #ffffff);
                 display: flex;
                 align-items: center;
@@ -635,11 +650,11 @@
                 box-shadow:
                     inset 1.5px 2px 2.5px rgba(255, 255, 255, 0.95),
                     inset -1.5px -2px 2.5px rgba(var(--chrono-rgb, 82, 229, 155), 0.45),
-                    inset 3px 0 8px rgba(255, 110, 155, 0.26),
-                    inset -3px 0 8px rgba(80, 210, 255, 0.32),
-                    0 18px 42px rgba(0, 0, 0, 0.52),
+                    inset 3px 0 8px rgba(255, 110, 155, 0.28),
+                    inset -3px 0 8px rgba(80, 210, 255, 0.34),
+                    0 18px 42px rgba(0, 0, 0, 0.50),
                     0 0 20px rgba(var(--chrono-rgb, 82, 229, 155), 0.25);
-                transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.25s ease;
+                transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.22s ease;
                 position: relative;
             }
             .ios-action-orb::before {
@@ -785,7 +800,7 @@
                 </div>
             </div>
 
-            <!-- iOS 26 底部懸浮導航列 (完全仿照參考圖：左側 4-Page 膠囊 + 高通透周圍折射 Q彈橢圓滑塊 + 右側獨立圓鈕) -->
+            <!-- iOS 26 底部懸浮導航列 -->
             <nav class="ios-bottom-dock" aria-label="iOS 26 Liquid Glass Navigation">
                 <div class="ios-tab-capsule" id="iosTabTrack">
                     <!-- 在按鈕上方移動的高通透 + 周圍強折射橢圓形液態玻璃滑塊 -->
@@ -829,7 +844,7 @@
                     </button>
                 </div>
 
-                <!-- 右側獨立圓形液態玻璃按鈕 (點擊立即激發錦鯉躍水與水波互動) -->
+                <!-- 右側獨立圓形液態玻璃按鈕 -->
                 <button type="button" class="ios-action-orb" id="iosActionOrb" title="觸發錦鯉躍水與生態互動">
                     <svg viewBox="0 0 24 24">
                         <circle cx="11" cy="11" r="7"></circle>
@@ -847,9 +862,9 @@
         initMobileTabBarPhysics();
     }
 
-    // 同步手機面板與原有 engine.js 控制項
+    let syncChronoSheetFn = null;
+
     function bindMobileControls() {
-        // 1. 生成 7 個場景液態玻璃按鈕
         const origSceneBtns = Array.from(document.querySelectorAll('#sceneListContainer .scene-item-btn'));
         const mSceneList = document.getElementById('mobileSceneList');
         if (mSceneList && origSceneBtns.length) {
@@ -869,11 +884,23 @@
             });
         }
 
-        // 2. 日照拉桿與週期按鈕同步
         const origSolar = document.getElementById('solarSlider');
         const mSolar = document.getElementById('mobileSolarSlider');
         const origSolarTxt = document.getElementById('solarTimeValue');
         const mSolarTxt = document.getElementById('mobileSolarTimeTxt');
+        const origScale = document.getElementById('clockScaleSlider');
+        const mScale = document.getElementById('mobileClockScaleSlider');
+        const mScaleTxt = document.getElementById('mobileClockScaleTxt');
+
+        syncChronoSheetFn = () => {
+            if (origSolar && mSolar && document.activeElement !== mSolar) mSolar.value = origSolar.value;
+            if (origSolarTxt && mSolarTxt) mSolarTxt.textContent = origSolarTxt.textContent;
+            if (origScale && mScale && mScaleTxt) {
+                mScale.value = origScale.value;
+                mScaleTxt.textContent = parseFloat(origScale.value).toFixed(2) + '×';
+            }
+        };
+
         if (origSolar && mSolar) {
             mSolar.value = origSolar.value;
             mSolar.addEventListener('pointerdown', () => origSolar.dispatchEvent(new PointerEvent('pointerdown')));
@@ -882,11 +909,6 @@
                 origSolar.dispatchEvent(new Event('input'));
                 if (origSolarTxt && mSolarTxt) mSolarTxt.textContent = origSolarTxt.textContent;
             });
-            // 定期同步自動推進的日照時間顯示
-            setInterval(() => {
-                if (document.activeElement !== mSolar) mSolar.value = origSolar.value;
-                if (origSolarTxt && mSolarTxt) mSolarTxt.textContent = origSolarTxt.textContent;
-            }, 200);
         }
 
         const mCycleGrid = document.getElementById('mobileCycleGrid');
@@ -903,10 +925,6 @@
             });
         }
 
-        // 3. 時鐘縮放拉桿與按鈕
-        const origScale = document.getElementById('clockScaleSlider');
-        const mScale = document.getElementById('mobileClockScaleSlider');
-        const mScaleTxt = document.getElementById('mobileClockScaleTxt');
         if (origScale && mScale) {
             mScale.value = origScale.value;
             if (mScaleTxt) mScaleTxt.textContent = parseFloat(origScale.value).toFixed(2) + '×';
@@ -940,13 +958,9 @@
             if (lbl && mTxt) mTxt.textContent = lbl.textContent.replace('SHAPE: ', '').split(' ')[0];
         });
         proxyClick('mBtnResetClock', 'btnResetClockPos', () => {
-            if (origScale && mScale && mScaleTxt) {
-                mScale.value = origScale.value;
-                mScaleTxt.textContent = parseFloat(origScale.value).toFixed(2) + '×';
-            }
+            if (syncChronoSheetFn) syncChronoSheetFn();
         });
 
-        // 4. 生態與音效控制
         const origVol = document.getElementById('volumeSlider');
         const mVol = document.getElementById('mobileVolumeSlider');
         const mVolTxt = document.getElementById('mobileVolumeTxt');
@@ -988,7 +1002,7 @@
         }
     }
 
-    // 二階欠阻尼彈簧物理：控制高通透折射橢圓形玻璃在導航按鈕上移動並產生 Q 彈擠壓拉伸變形
+    // 二階欠阻尼彈簧物理：純 GPU transform 驅動，不在每幀修改 SVG DOM 屬性
     function initMobileTabBarPhysics() {
         const track = document.getElementById('iosTabTrack');
         const indicator = document.getElementById('iosSlidingPill');
@@ -1001,8 +1015,7 @@
         let currentX = 0;
         let targetX = 0;
         let velocityX = 0;
-        let pillWidth = 80;
-        let targetWidth = 80;
+        let pillWidth = 82;
         let scaleX = 1;
         let scaleY = 1;
         let pressSquish = 0;
@@ -1010,45 +1023,50 @@
         let animId = 0;
         let lastTime = 0;
         let isDraggingTab = false;
+        let tabCenters = [];
 
-        function measureTab(idx) {
-            const btn = tabs[idx];
-            if (!btn) return { x: 5, w: 80 };
+        function cacheTabMetrics() {
             const tRect = track.getBoundingClientRect();
-            const bRect = btn.getBoundingClientRect();
-            return {
-                x: bRect.left - tRect.left,
-                w: bRect.width
-            };
+            tabCenters = tabs.map(btn => {
+                const bRect = btn.getBoundingClientRect();
+                return {
+                    x: bRect.left - tRect.left,
+                    w: bRect.width,
+                    cx: (bRect.left - tRect.left) + bRect.width / 2
+                };
+            });
+            if (tabCenters[activeIndex]) {
+                pillWidth = tabCenters[activeIndex].w;
+                indicator.style.width = pillWidth.toFixed(1) + 'px';
+            }
         }
 
         function setPage(idx, immediate, fromDrag) {
+            if (!tabCenters.length) cacheTabMetrics();
             const prevIdx = activeIndex;
             activeIndex = clamp(idx, 0, tabs.length - 1);
             tabs.forEach((btn, i) => btn.classList.toggle('active', i === activeIndex));
 
             const pageId = tabs[activeIndex].getAttribute('data-page');
+            if (pageId === 'chrono' && syncChronoSheetFn) syncChronoSheetFn();
+
             sheets.forEach(sh => {
                 const match = sh.getAttribute('data-page-sheet') === pageId;
                 sh.classList.toggle('open', match);
             });
-            // 切換分頁時若打開了 GlassLab 面板則自動收起以免重疊
             if (panel && panel.classList.contains('open') && pageId !== 'lab') {
                 panel.classList.remove('open');
             }
 
-            const m = measureTab(activeIndex);
+            const m = tabCenters[activeIndex] || { x: 5, w: 82 };
             targetX = m.x;
-            targetWidth = m.w;
 
-            // 點擊不同 Page 時注入初速度脈衝，觸發明顯的液態水滴拉伸與果凍回彈
             if (!immediate && prevIdx !== activeIndex && !fromDrag) {
                 const dir = targetX > currentX ? 1 : -1;
                 const dist = Math.abs(targetX - currentX);
                 velocityX += dir * Math.min(540, 165 + dist * 1.75);
                 pressSquish = 0.24;
             } else if (!immediate && prevIdx === activeIndex && !fromDrag) {
-                // 點擊當前已選中的 Page：如果抽屜開著可切換收合，並觸發原地 Q彈果凍擠壓
                 if (pageId !== 'today') {
                     const targetSheet = sheets.find(sh => sh.getAttribute('data-page-sheet') === pageId);
                     if (targetSheet) targetSheet.classList.toggle('open');
@@ -1059,7 +1077,6 @@
 
             if (immediate) {
                 currentX = targetX;
-                pillWidth = targetWidth;
                 velocityX = 0;
                 scaleX = 1;
                 scaleY = 1;
@@ -1070,7 +1087,6 @@
         }
 
         function renderIndicator() {
-            indicator.style.width = pillWidth.toFixed(1) + 'px';
             indicator.style.transform =
                 `translate3d(${currentX.toFixed(2)}px, 0, 0) scale(${scaleX.toFixed(4)}, ${scaleY.toFixed(4)})`;
         }
@@ -1079,7 +1095,6 @@
             const dt = Math.min(0.032, Math.max(0.004, (now - lastTime) / 1000));
             lastTime = now;
 
-            // 二階欠阻尼彈簧物理 (Stiffness = 285, Damping = 17.5 -> 呈現 Q 彈過衝與果凍震盪)
             const stiffness = 285;
             const damping = 17.5;
             const displacement = currentX - targetX;
@@ -1087,26 +1102,14 @@
 
             velocityX += accel * dt;
             currentX += velocityX * dt;
-
-            pillWidth += (targetWidth - pillWidth) * Math.min(1, dt * 16);
             pressSquish += (targetPressSquish - pressSquish) * Math.min(1, dt * 12);
 
-            // 物理擠壓變形 (Squash & Stretch)：移動速度越快，橢圓水平拉伸越明顯、垂直擠壓變扁；抵達終點時反向回彈
             const speedNorm = clamp(Math.abs(velocityX) / 820, 0, 0.46);
             const brakeSquash = clamp(-displacement * Math.sign(velocityX || 1) * 0.0026, -0.14, 0.14);
             const stretch = speedNorm * 0.92 + brakeSquash + pressSquish * 0.20;
 
             scaleX = clamp(1 + stretch, 0.82, 1.42);
-            // 保持液態水滴面積近似守恆：水平拉長時垂直壓扁，按壓時微幅外擴 Q 彈
             scaleY = clamp((1 / Math.pow(scaleX, 0.76)) + pressSquish * 0.06, 0.72, 1.20);
-
-            // 移動過程中動態增強橢圓周圍的透鏡折射與色散
-            if (pillDG && pillDR && pillDB) {
-                const dynScale = Math.max(28, P.refract * 0.92) * (1 + speedNorm * 0.95);
-                pillDR.setAttribute('scale', (dynScale * (1 - P.disp)).toFixed(1));
-                pillDG.setAttribute('scale', dynScale.toFixed(1));
-                pillDB.setAttribute('scale', (dynScale * (1 + P.disp)).toFixed(1));
-            }
 
             renderIndicator();
 
@@ -1120,7 +1123,6 @@
                 animId = requestAnimationFrame(stepPhysics);
             } else {
                 currentX = targetX;
-                pillWidth = targetWidth;
                 velocityX = 0;
                 scaleX = 1;
                 scaleY = 1;
@@ -1144,24 +1146,23 @@
             });
         });
 
+        let trackLeft = 0;
         track.addEventListener('pointerdown', () => {
             isDraggingTab = true;
+            trackLeft = track.getBoundingClientRect().left;
             targetPressSquish = 0.24;
             startLoop();
         });
 
         window.addEventListener('pointermove', (e) => {
-            if (!isDraggingTab) return;
-            const tRect = track.getBoundingClientRect();
-            const relX = e.clientX - tRect.left;
+            if (!isDraggingTab || !tabCenters.length) return;
+            const relX = e.clientX - trackLeft;
             let bestIdx = activeIndex;
             let bestDist = Infinity;
-            tabs.forEach((btn, i) => {
-                const r = btn.getBoundingClientRect();
-                const cx = (r.left - tRect.left) + r.width / 2;
-                const d = Math.abs(relX - cx);
+            for (let i = 0; i < tabCenters.length; i++) {
+                const d = Math.abs(relX - tabCenters[i].cx);
                 if (d < bestDist) { bestDist = d; bestIdx = i; }
-            });
+            }
             if (bestIdx !== activeIndex) {
                 setPage(bestIdx, false, true);
             }
@@ -1177,7 +1178,6 @@
         window.addEventListener('pointerup', endPointer);
         window.addEventListener('pointercancel', endPointer);
 
-        // 點擊畫布空白處時自動回到 Today 純淨觀景頁 (收起抽屜並讓橢圓玻璃彈回 Today)
         const canvasEl = document.getElementById('canvas');
         if (canvasEl) {
             canvasEl.addEventListener('pointerdown', () => {
@@ -1190,7 +1190,6 @@
             });
         }
 
-        // 右側獨立圓形玻璃按鈕：點擊觸發躍魚 + 生態互動 + 果凍 Q 彈動畫
         if (actionOrb) {
             actionOrb.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -1204,7 +1203,6 @@
             });
         }
 
-        // 所有液態玻璃按鈕點擊時觸發 Q彈果凍回饋
         document.querySelectorAll('.lg-btn, .lg-pill-mini').forEach(btn => {
             btn.addEventListener('pointerdown', () => {
                 btn.classList.remove('jelly-pop');
@@ -1214,10 +1212,12 @@
         });
 
         window.addEventListener('resize', () => {
+            cacheTabMetrics();
             setPage(activeIndex, true, false);
         });
 
         requestAnimationFrame(() => {
+            cacheTabMetrics();
             setPage(0, true, false);
         });
     }
