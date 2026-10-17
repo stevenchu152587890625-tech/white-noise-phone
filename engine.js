@@ -184,7 +184,7 @@
             name: '琉璃1：玻璃山嶺 // 晶透幻境',
             shortName: '玻璃山嶺・晶透琉璃',
             ecoDesc: 'CRYSTAL PEAKS / GLASS LOTUS / PRISM KOI',
-            audioSrc: 'audio/alpine_wind.ogg',
+            audioSrc: 'audio/glass_mountain.ogg',
             ui: { accent: '#d8f6ff', rgb: '216, 246, 255', bg: 'rgba(8, 16, 28, 0.92)', muted: '#a6c8dc', badgeText: '#ffffff', tag: 'CRYSTAL // 琉璃' },
             sky: ['#071022', '#102542', '#050b16'],
             water: { g0: 'rgba(120, 215, 255, 0.36)', g1: 'rgba(12, 38, 72, 0.88)', back: 'rgba(175, 235, 255, 0.26)', surf: 'rgba(240, 252, 255, 0.96)', glow: 'rgba(180, 240, 255, 0.42)', caustic: 0.095 },
@@ -217,7 +217,7 @@
     let W = 0, H = 0, DPR = 1, dprCap = Math.min(window.devicePixelRatio || 1, 2);
     let quality = 1;
     let waterY = 0;
-    let SC = SCENES[0], sceneIdx = 0, speedIdx = 2; // 預設 SLOW (0.3x)
+    let SC = SCENES[SCENES.length - 1], sceneIdx = SCENES.length - 1, speedIdx = 2; // 預設最新主題 (琉璃玻璃山嶺) & SLOW (0.3x)
     let T = 0;
     let G = 1000;
     let waterGrad = null, fallGrad = null;
@@ -3014,8 +3014,15 @@
         function mkEl(src) {
             const e = new Audio();
             e.preload = 'auto'; e.loop = false; e.src = src; e.volume = 0; e._env = 0; e._goal = 0;
+            e.autoplay = true;
+            e.playsInline = true;
             attachSpatial(e);
-            e.addEventListener('playing', () => status(muted ? 'MUTED // SILENT' : 'ONLINE // LOOPING'));
+            e.addEventListener('playing', () => {
+                unlocked = true;
+                status(muted ? 'MUTED // SILENT' : 'ONLINE // LOOPING');
+                const lbl = $('audioLabel');
+                if (lbl) lbl.textContent = muted ? 'AUDIO: MUTED' : 'AUDIO: PLAYING';
+            });
             e.addEventListener('waiting', () => status('BUFFERING'));
             e.addEventListener('error', () => status('FILE ERROR'));
             return e;
@@ -3025,7 +3032,19 @@
             if (!p) { p = players[sc.id] = { sc, a: mkEl(sc.audioSrc), b: null, cur: null, env: 0, goal: 0 }; p.cur = p.a; }
             return p;
         }
-        function safePlay(e) { const pr = e.play(); if (pr && pr.catch) pr.catch(() => status('CLICK TO ENABLE AUDIO')); }
+        function safePlay(e) {
+            if (!e) return;
+            const pr = e.play();
+            if (pr && pr.then) {
+                pr.then(() => {
+                    unlocked = true;
+                    status(muted ? 'MUTED // SILENT' : 'ONLINE // LOOPING');
+                }).catch(() => {
+                    // 若瀏覽器尚未允許有聲自動播放，先以靜音啟動串流並在滑鼠移動/滾輪/觸控瞬間無縫解除靜音
+                    unlocked = false;
+                });
+            }
+        }
         function startPlayer(p) {
             p.goal = 1; const e = p.cur; e._goal = 1;
             if (e.paused) safePlay(e);
@@ -3064,12 +3083,15 @@
         let lastFishSfxT = 0;
         let lastFrogSfxT = 0;
 
-        // 預載入真實水花與撲通音效池 (支援 file:// 與 http:// 零延遲多重疊加播放)
+        // 預載入真實水花與撲通音效池 + 玻璃山嶺真實琉璃敲擊/風鈴音效池
         const REAL_SFX_FILES = {
             plop: 'audio/splash_plop.ogg',
             jump: 'audio/splash_jump.mp3',
             splash: 'audio/splash_real.wav',
-            bubbles: 'audio/splash_bubbles.wav'
+            bubbles: 'audio/splash_bubbles.wav',
+            glass_bell: 'audio/glass_bell.wav',
+            glass_chime: 'audio/glass_chime.ogg',
+            glass_ring: 'audio/glass_ring.ogg'
         };
         const sfxPools = {};
         function getSfxAudio(key) {
@@ -3104,38 +3126,69 @@
             } catch (e) {}
         }
 
-        // 錦鯉落水音效：僅保留落水入潭時的真實水花聲 ('in')
+        let lastGlassSfxT = 0;
+        // 玻璃山嶺專屬互動玻璃音效 ('tap' 清脆玻璃敲擊聲 / 'chime' 琉璃風鈴聲 / 'ring' 水晶高腳杯共鳴聲)
+        function playGlassSfx(kind) {
+            if (!sfxEnabled || muted || !SC || !SC.glassWorld) return;
+            const now = performance.now();
+            if (now - lastGlassSfxT < 55) return;
+            lastGlassSfxT = now;
+            if (kind === 'chime') {
+                playRealSfxSample('glass_chime', rnd(0.92, 1.22), 0.72);
+            } else if (kind === 'ring') {
+                playRealSfxSample('glass_ring', rnd(0.88, 1.18), 0.68);
+            } else {
+                playRealSfxSample('glass_bell', rnd(0.85, 1.35), 0.78);
+            }
+        }
+
+        // 錦鯉落水音效：僅保留落水入潭時的真實水花聲 ('in')；若在玻璃山嶺場景則疊加清脆琉璃敲擊聲
         function playFishSfx(x, type) {
             if (!sfxEnabled || muted || type !== 'in') return;
             const now = performance.now();
             if (now - lastFishSfxT < 65) return;
             lastFishSfxT = now;
             playRealSfxSample('jump', rnd(0.92, 1.05), 0.90);
+            if (SC && SC.glassWorld) {
+                playRealSfxSample('glass_bell', rnd(0.88, 1.18), 0.75);
+            }
         }
 
-        // 青蛙落水音效：僅保留落水時的真實水花聲 ('land')
+        // 青蛙落水音效：僅保留落水時的真實水花聲 ('land')；若在玻璃山嶺場景則疊加清脆玻璃聲
         function playFrogSfx(x, type) {
             if (!sfxEnabled || muted || type !== 'land') return;
             const now = performance.now();
             if (now - lastFrogSfxT < 80) return;
             lastFrogSfxT = now;
             playRealSfxSample('jump', rnd(0.95, 1.06), 0.78);
+            if (SC && SC.glassWorld) {
+                playRealSfxSample('glass_bell', rnd(1.05, 1.35), 0.68);
+            }
         }
 
         setInterval(tick, 50);
         const api = {
-            unlock() { if (unlocked) return; unlocked = true; initSpatial(); if (ac && ac.state !== 'running') ac.resume(); if (current) startPlayer(current); },
+            unlock() {
+                unlocked = true;
+                initSpatial();
+                if (ac && ac.state !== 'running') {
+                    try { ac.resume(); } catch (err) {}
+                }
+                if (current) startPlayer(current);
+            },
             play(sc) {
                 const next = getPlayer(sc);
                 if (current && current !== next) { current.goal = 0; current.a._goal = 0; if (current.b) current.b._goal = 0; }
                 current = next; curScene = sc;
-                if (unlocked) startPlayer(next); else status('CLICK TO ENABLE AUDIO');
+                // 進入網頁直接嘗試啟動播放，不強制等待點擊
+                startPlayer(next);
             },
             setVolume(v) { master = clamp(parseFloat(v), 0, 1); },
             toggleMute() { muted = !muted; status(muted ? 'MUTED // SILENT' : 'ONLINE // LOOPING'); return !muted; },
             isUnlocked() { return unlocked; },
             playFishSfx,
             playFrogSfx,
+            playGlassSfx,
             isSfxEnabled() { return sfxEnabled; },
             setSfxEnabled(on) {
                 sfxEnabled = !!on;
@@ -3466,8 +3519,15 @@
             else if (k === 'h' || k === 'tab') { if (k === 'tab') e.preventDefault(); toggleHud(); }
             else if (k >= '1' && k <= '9') setScene(parseInt(k, 10) - 1);
         });
-        const unlock = () => Audio2.unlock();
-        ['pointerdown', 'keydown', 'touchend'].forEach(ev => window.addEventListener(ev, unlock, { passive: true }));
+        const unlock = () => {
+            if (!Audio2.isUnlocked()) Audio2.unlock();
+        };
+        ['pointerdown', 'pointermove', 'mousemove', 'wheel', 'keydown', 'touchstart', 'touchend', 'focus', 'load'].forEach(ev =>
+            window.addEventListener(ev, unlock, { passive: true })
+        );
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) unlock();
+        });
         syncSolarUI(true);
     }
 
@@ -3787,9 +3847,15 @@
             } else if (hit.type === 'reed' || hit.type === 'seaweed' || hit.type === 'coral') {
                 o.dragged = true;
                 o.bendV = 0;
-            } else if (hit.type === 'sun' || hit.type === 'moon') {
+            }
+            if (hit.type === 'sun' || hit.type === 'moon') {
                 isDraggingSolar = true;
                 updateSunMoonFromDrag(hit.type, x, y);
+                Audio2.playGlassSfx('ring');
+            } else if (hit.type === 'branch' || hit.type === 'reed' || hit.type === 'seaweed' || hit.type === 'coral' || hit.type === 'fly' || hit.type === 'leaf') {
+                Audio2.playGlassSfx('chime');
+            } else {
+                Audio2.playGlassSfx('tap');
             }
             if (canvas && canvas.setPointerCapture && e.pointerId !== undefined) {
                 try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
@@ -3797,6 +3863,7 @@
         } else {
             dragCtrl.type = 'water';
             dragCtrl.obj = null;
+            Audio2.playGlassSfx('tap');
         }
     }
 
@@ -4596,7 +4663,8 @@
     resize();
     setupUI();
     initClock();
-    setScene(0);
+    setScene(SCENES.length - 1);
+    Audio2.unlock();
     bootComplete = true;
     requestAnimationFrame(frame);
 })();
