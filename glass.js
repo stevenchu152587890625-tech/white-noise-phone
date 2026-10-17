@@ -1,10 +1,11 @@
 /* ==========================================================================
- * glass.js — iOS 26 風格 Liquid Glass 時鐘玻璃 + 手機底部液態導航列與物理彈性膠囊 (60FPS 極速優化版)
+ * glass.js — iOS 26 風格 Liquid Glass 時鐘玻璃 + 手機底部液態導航列與物理彈性膠囊 (極速零延遲版)
  *  - 預設磨砂 = 0 (純光學凸透鏡折射 + 菲涅爾色散高光，不模糊)
- *  - 性能優化：
- *    1) 消除嵌套 backdrop-filter 爆炸：抽屜子按鈕採用零濾鏡開銷的高通透光學折射邊框與色散內陰影
- *    2) 隱藏未展開的 .ios-page-sheet (visibility: hidden + 僅展開時啟用 backdrop-filter)，待機零合成負擔
- *    3) 移動橢圓滑塊採用單通道高速 SVG 凸透鏡位移 + 純 GPU transform: translate3d/scale，不在每幀修改 SVG DOM
+ *  - 專屬水境主題導航名稱與純單色極簡向量圖示 (杜絕任何彩色 Emoji)
+ *  - 極速觸控優化：
+ *    1) pointerdown 瞬發反應 + 場景列表 Fast-Tap (< 8px 零延遲觸發)，徹底消除 100ms click 延遲
+ *    2) 高剛性二階欠阻尼彈簧 (stiffness=460, damping=24) + 拖曳時手指直接耦合跟手 (Direct Tracking)
+ *    3) 滑桿 requestAnimationFrame 合批節流，120Hz 觸控螢幕拖動絲滑不卡頓
  * ========================================================================== */
 (function () {
     'use strict';
@@ -47,7 +48,6 @@
         svg.setAttribute('width', '0'); svg.setAttribute('height', '0');
         svg.style.cssText = 'position:fixed;left:-9999px;top:0;pointer-events:none';
         svg.innerHTML =
-            // 時鐘主濾鏡
             '<filter id="lgFilter" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB" filterUnits="objectBoundingBox">' +
             '<feImage id="lgImg" x="0" y="0" width="300" height="120" preserveAspectRatio="none" result="map"/>' +
             '<feDisplacementMap id="lgDR" in="SourceGraphic" in2="map" scale="60" xChannelSelector="R" yChannelSelector="G" result="dr"/>' +
@@ -59,7 +59,6 @@
             '<feBlend in="cr" in2="cg" mode="screen" result="rg"/>' +
             '<feBlend in="rg" in2="cb" mode="screen"/>' +
             '</filter>' +
-            // iOS 26 底部移動橢圓膠囊與圓鈕專用：極速單通道凸透鏡折射濾鏡 (GPU 快取友善，比 8 節點濾鏡快 4 倍)
             '<filter id="iosPillLensFilter" x="0%" y="0%" width="100%" height="100%" color-interpolation-filters="sRGB">' +
             '<feImage id="pillLensImg" x="0%" y="0%" width="100%" height="100%" preserveAspectRatio="none" result="pmap"/>' +
             '<feDisplacementMap id="pillDisp" in="SourceGraphic" in2="pmap" scale="48" xChannelSelector="R" yChannelSelector="G"/>' +
@@ -70,7 +69,6 @@
         buildPillLensMap(96, 52);
     }
 
-    // 為 iOS 26 移動橢圓膠囊生成「中心完全高通透、周圍橢圓邊緣強烈凸透鏡折射」的靜態位移貼圖
     function buildPillLensMap(w, h) {
         if (!pillFeImg) return;
         cv.width = w; cv.height = h;
@@ -97,7 +95,6 @@
         pillFeImg.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', url);
     }
 
-    // 圓角矩形 SDF 位移貼圖 (快取上次尺寸與參數，避免重複生成)
     let cachedMapKey = '';
     let cachedMapUrl = '';
     function renderMap(w, h) {
@@ -148,16 +145,13 @@
         dG.setAttribute('scale', s.toFixed(1));
         dB.setAttribute('scale', (s * (1 + P.disp)).toFixed(1));
 
-        // 同步更新橢圓滑塊單通道折射強度 (只在面板調動時更新一次，不在動畫迴圈中每幀修改)
         if (pillDisp) {
             pillDisp.setAttribute('scale', Math.max(24, s * 0.85).toFixed(1));
         }
 
-        // 1) 橢圓滑塊與圓鈕使用單通道高速凸透鏡濾鏡
         const pillBf = 'url(#iosPillLensFilter) blur(' + P.frost + 'px) saturate(' + Math.min(210, P.sat + 15) + '%) brightness(' + (P.bright + 3) + '%)';
         document.documentElement.style.setProperty('--lg-pill-filter', pillBf);
 
-        // 2) 抽屜與底座使用零 SVG 負擔的光學增亮飽和濾鏡 (磨砂 = P.frost 預設 0)
         const fastSheetBf = 'blur(' + P.frost + 'px) saturate(' + P.sat + '%) brightness(' + P.bright + '%) contrast(108%)';
         document.documentElement.style.setProperty('--lg-fast-filter', fastSheetBf);
 
@@ -200,10 +194,10 @@
             'border:1.5px solid rgba(255,255,255,0.52);color:var(--chrono-text,#e2e8f0);font:11px/1.4 inherit;font-family:inherit;display:none;letter-spacing:1px}' +
             '#glassLab.open{display:block}#glassLab h4{margin:0 0 8px;font-size:12px;color:var(--chrono-pink,#52e59b);display:flex;justify-content:space-between;text-shadow:0 1px 4px rgba(0,0,0,0.85)}' +
             '#glassLab .fxg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px}' +
-            '#glassLab .fxg button{font:inherit;font-size:10px;padding:8px 8px;border-radius:14px;border:1px solid rgba(255,255,255,.38);background:rgba(255,255,255,.07);color:#fff;cursor:pointer;text-align:left;box-shadow:inset 1px 1px 1.5px rgba(255,255,255,0.65);text-shadow:0 1px 3px rgba(0,0,0,0.85)}' +
+            '#glassLab .fxg button{font:inherit;font-size:10px;padding:8px 8px;border-radius:14px;border:1px solid rgba(255,255,255,.38);background:rgba(255,255,255,.07);color:#fff;cursor:pointer;text-align:left;box-shadow:inset 1px 1px 1.5px rgba(255,255,255,0.65);text-shadow:0 1px 3px rgba(0,0,0,0.85);touch-action:manipulation}' +
             '#glassLab .fxg button.on{background:rgba(var(--chrono-rgb,82,229,155),.28);border-color:var(--chrono-pink,#52e59b);color:var(--chrono-pink,#52e59b);font-weight:700}' +
             '#glassLab label{display:flex;justify-content:space-between;margin-top:7px;font-size:10.5px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,0.85)}#glassLab input[type=range]{width:100%;accent-color:var(--chrono-pink,#52e59b)}' +
-            '#glassLab .rb{margin-top:10px;width:100%;font:inherit;padding:9px;border-radius:16px;border:1px solid rgba(255,255,255,.45);background:rgba(255,255,255,.10);color:#fff;cursor:pointer;box-shadow:inset 1px 1.5px 2px rgba(255,255,255,0.75);text-shadow:0 1px 3px rgba(0,0,0,0.85);font-weight:700}';
+            '#glassLab .rb{margin-top:10px;width:100%;font:inherit;padding:9px;border-radius:16px;border:1px solid rgba(255,255,255,.45);background:rgba(255,255,255,.10);color:#fff;cursor:pointer;box-shadow:inset 1px 1.5px 2px rgba(255,255,255,0.75);text-shadow:0 1px 3px rgba(0,0,0,0.85);font-weight:700;touch-action:manipulation}';
         document.head.appendChild(st);
 
         panel = document.createElement('div'); panel.id = 'glassLab';
@@ -216,10 +210,10 @@
         document.body.appendChild(panel);
         ['pointerdown', 'wheel', 'keydown'].forEach(ev => panel.addEventListener(ev, e => e.stopPropagation()));
 
-        panel.querySelectorAll('[data-fx]').forEach(b => b.addEventListener('click', () => { P.fx = +b.dataset.fx; sync(); save(); schedule(); }));
+        panel.querySelectorAll('[data-fx]').forEach(b => b.addEventListener('pointerdown', () => { P.fx = +b.dataset.fx; sync(); save(); schedule(); }));
         panel.querySelectorAll('input[data-k]').forEach(inp => inp.addEventListener('input', () => { P[inp.dataset.k] = parseFloat(inp.value); sync(); save(); schedule(); }));
-        panel.querySelector('#glReset').addEventListener('click', () => { P = Object.assign({}, DEF); sync(); save(); schedule(); });
-        panel.querySelector('#glClose').addEventListener('click', toggle);
+        panel.querySelector('#glReset').addEventListener('pointerdown', () => { P = Object.assign({}, DEF); sync(); save(); schedule(); });
+        panel.querySelector('#glClose').addEventListener('pointerdown', toggle);
         sync();
     }
     function sync() {
@@ -240,7 +234,7 @@
     }
 
     // =========================================================================
-    // iOS 26 手機操作介面 (60FPS 極速合成架構)
+    // iOS 26 手機操作介面 (專屬水境導航圖示與名稱 + 零延遲觸控架構)
     // =========================================================================
     function buildMobileInterface() {
         const st = document.createElement('style');
@@ -250,47 +244,16 @@
                 --lg-fast-filter: blur(0px) saturate(170%) brightness(105%) contrast(108%);
             }
 
-            /* 隱藏舊式桌面側邊欄，全面改用 iOS 26 手機懸浮液態玻璃介面 */
             .chrono-hud,
             .scene-selector-hud,
             .hud-toggle-btn,
-            .bottom-hint {
+            .bottom-hint,
+            .status-hud,
+            .chrono-clock-stage.clock-hidden {
                 display: none !important;
             }
 
-            /* 頂部靈動狀態膠囊 (磨砂=0 高通透液態玻璃邊框) */
-            .status-hud {
-                position: fixed !important;
-                top: max(14px, env(safe-area-inset-top, 14px)) !important;
-                left: 50% !important;
-                right: auto !important;
-                transform: translateX(-50%) !important;
-                opacity: 1 !important;
-                display: flex !important;
-                align-items: center;
-                gap: 14px;
-                padding: 8px 20px !important;
-                border-radius: 999px !important;
-                clip-path: none !important;
-                background: linear-gradient(135deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0.02) 45%, rgba(0, 0, 0, 0.16) 100%) !important;
-                backdrop-filter: none !important;
-                -webkit-backdrop-filter: none !important;
-                border: 1.2px solid rgba(255, 255, 255, 0.52) !important;
-                box-shadow:
-                    inset 1px 1.5px 1.5px rgba(255, 255, 255, 0.88),
-                    inset 2px 0 6px rgba(255, 110, 155, 0.18),
-                    inset -2px 0 6px rgba(80, 210, 255, 0.22),
-                    inset -1px -1.5px 1.5px rgba(var(--chrono-rgb, 82, 229, 155), 0.38),
-                    0 10px 26px rgba(0, 0, 0, 0.40) !important;
-                font-size: 10.5px !important;
-                white-space: nowrap;
-                z-index: 120 !important;
-            }
-            .status-hud > div:nth-child(n+3) {
-                display: none !important;
-            }
-
-            /* 介面所有按鈕：預設同款磨砂=0 高通透液態玻璃質感 (移除嵌套 backdrop-filter，改用純 GPU 菲涅爾高光與雙色散內光圈，0 掉幀) */
+            /* 介面所有按鈕：預設同款磨砂=0 高通透液態玻璃質感 + touch-action: manipulation 零延遲 */
             .lg-btn {
                 position: relative;
                 background: radial-gradient(
@@ -307,6 +270,7 @@
                 letter-spacing: 1.4px;
                 padding: 12px 15px;
                 cursor: pointer;
+                touch-action: manipulation;
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
@@ -318,7 +282,7 @@
                     inset -1px -1.5px 2px rgba(var(--chrono-rgb, 82, 229, 155), 0.38),
                     0 8px 20px rgba(0, 0, 0, 0.32);
                 text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
-                transition: transform 0.20s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.22s ease, color 0.22s ease;
+                transition: transform 0.14s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.16s ease, color 0.16s ease;
                 overflow: hidden;
             }
             .lg-btn::before {
@@ -330,7 +294,7 @@
                 pointer-events: none;
             }
             .lg-btn:active {
-                transform: scale(0.93, 0.96);
+                transform: scale(0.94, 0.96);
             }
             .lg-btn.active {
                 border-color: var(--chrono-pink);
@@ -349,25 +313,26 @@
                 color: var(--chrono-pink);
                 opacity: 0.95;
                 font-weight: 700;
+                letter-spacing: 1px;
             }
 
             @keyframes jellyPopAnim {
                 0%   { transform: scale(1, 1); }
-                28%  { transform: scale(1.14, 0.86); }
-                55%  { transform: scale(0.92, 1.08); }
-                76%  { transform: scale(1.04, 0.97); }
+                25%  { transform: scale(1.14, 0.86); }
+                52%  { transform: scale(0.92, 1.08); }
+                76%  { transform: scale(1.03, 0.98); }
                 100% { transform: scale(1, 1); }
             }
             .jelly-pop {
-                animation: jellyPopAnim 0.44s cubic-bezier(0.25, 1, 0.5, 1);
+                animation: jellyPopAnim 0.34s cubic-bezier(0.25, 1, 0.5, 1);
             }
 
-            /* 手機分頁上彈卡片 (關閉時 visibility: hidden 且不掛載濾鏡，徹底釋放 GPU) */
+            /* 手機分頁上彈卡片 (極速 0.22s Q彈展開 / 0.14s 瞬收，contain 隔離排版) */
             .ios-page-sheet {
                 position: fixed;
                 left: 50%;
                 bottom: calc(98px + env(safe-area-inset-bottom, 0px));
-                transform: translate3d(-50%, 26px, 0) scale(0.95);
+                transform: translate3d(-50%, 18px, 0) scale(0.96);
                 width: min(92vw, 430px);
                 max-height: 55vh;
                 overflow-y: auto;
@@ -387,11 +352,12 @@
                 opacity: 0;
                 visibility: hidden;
                 pointer-events: none;
+                contain: layout style;
                 will-change: transform, opacity;
                 transition:
-                    transform 0.38s cubic-bezier(0.22, 1.35, 0.36, 1),
-                    opacity 0.22s ease,
-                    visibility 0.22s;
+                    transform 0.15s ease-out,
+                    opacity 0.14s ease-out,
+                    visibility 0.15s;
             }
             .ios-page-sheet::-webkit-scrollbar { display: none; }
             .ios-page-sheet.open {
@@ -401,6 +367,10 @@
                 pointer-events: auto;
                 backdrop-filter: var(--lg-fast-filter);
                 -webkit-backdrop-filter: var(--lg-fast-filter);
+                transition:
+                    transform 0.22s cubic-bezier(0.2, 1.28, 0.32, 1),
+                    opacity 0.16s ease-out,
+                    visibility 0s;
             }
 
             .sheet-pill-handle {
@@ -447,7 +417,6 @@
                 gap: 8px;
             }
 
-            /* 液態玻璃滑桿膠囊盒 (零嵌套濾鏡，高通透內高光) */
             .lg-slider-card {
                 padding: 11px 15px;
                 border-radius: 22px;
@@ -487,9 +456,10 @@
                 border: 1px solid rgba(255, 255, 255, 0.44);
                 box-shadow: inset 0 1px 1.5px rgba(255, 255, 255, 0.78);
                 cursor: pointer;
+                touch-action: manipulation;
                 text-align: center;
                 text-shadow: 0 1px 3px rgba(0,0,0,0.85);
-                transition: transform 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+                transition: transform 0.14s ease, border-color 0.14s ease, color 0.14s ease;
             }
             .lg-pill-mini.active {
                 border-color: var(--chrono-pink);
@@ -499,7 +469,7 @@
                 box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.94), 0 0 12px var(--chrono-pink-glow);
             }
 
-            /* ==================== 截圖同款 iOS 26 底部懸浮導航列 ==================== */
+            /* ==================== 截圖同款 iOS 26 底部懸浮導航列 (專屬水境名稱與純向量圖示) ==================== */
             .ios-bottom-dock {
                 position: fixed;
                 left: 50%;
@@ -515,7 +485,6 @@
                 -webkit-user-select: none;
             }
 
-            /* 左側 4-Page 膠囊玻璃底座 (磨砂=0 高通透液態玻璃，不套重型 SVG 濾鏡以消除與內部滑塊的雙層濾鏡衝突) */
             .ios-tab-capsule {
                 position: relative;
                 flex: 1;
@@ -538,7 +507,7 @@
                 touch-action: none;
             }
 
-            /* 在按鈕上方移動的「高通透 + 周圍強折射與色散」橢圓形液態玻璃滑塊 (唯一掛載 #iosPillLensFilter 的動態滑塊，絲滑 60FPS) */
+            /* 在按鈕上方移動的高通透 + 周圍強折射與色散橢圓形液態玻璃滑塊 */
             .ios-sliding-pill {
                 position: absolute;
                 top: 5px;
@@ -550,7 +519,6 @@
                 z-index: 3;
                 transform-origin: center center;
                 will-change: transform;
-                /* 中心極高通透，周圍橢圓邊緣具有凸透鏡折射與菲涅爾高光 */
                 background: radial-gradient(
                     100% 100% at 50% 50%,
                     rgba(255, 255, 255, 0.01) 0%,
@@ -570,7 +538,6 @@
                     0 6px 18px rgba(0, 0, 0, 0.34),
                     0 0 16px rgba(var(--chrono-rgb, 82, 229, 155), 0.30);
             }
-            /* 橢圓玻璃頂部水滴高光弧 */
             .ios-sliding-pill::before {
                 content: '';
                 position: absolute;
@@ -595,11 +562,12 @@
                 flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                gap: 3px;
+                gap: 4px;
                 cursor: pointer;
+                touch-action: none;
                 font-family: inherit;
                 padding: 0;
-                transition: color 0.20s ease, transform 0.20s cubic-bezier(0.34, 1.56, 0.64, 1);
+                transition: color 0.14s ease, transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1);
                 text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
             }
             .ios-tab-item svg {
@@ -607,16 +575,16 @@
                 height: 22px;
                 stroke: currentColor;
                 fill: none;
-                stroke-width: 1.9;
+                stroke-width: 1.85;
                 stroke-linecap: round;
                 stroke-linejoin: round;
                 filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.65));
-                transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), stroke 0.20s ease;
+                transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), stroke 0.14s ease;
             }
             .ios-tab-item span {
-                font-size: 10px;
+                font-size: 10.5px;
                 font-weight: 700;
-                letter-spacing: 0.7px;
+                letter-spacing: 1.5px;
             }
             .ios-tab-item.active {
                 color: var(--chrono-pink);
@@ -627,7 +595,7 @@
                 filter: drop-shadow(0 0 8px var(--chrono-pink-glow));
             }
 
-            /* 右側獨立圓形液態玻璃按鈕 (同款磨砂=0 + 邊緣凸透鏡折射) */
+            /* 右側獨立圓形液態玻璃按鈕 (水滴漣漪躍魚觸發器) */
             .ios-action-orb {
                 width: 66px;
                 height: 66px;
@@ -647,6 +615,7 @@
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
+                touch-action: manipulation;
                 box-shadow:
                     inset 1.5px 2px 2.5px rgba(255, 255, 255, 0.95),
                     inset -1.5px -2px 2.5px rgba(var(--chrono-rgb, 82, 229, 155), 0.45),
@@ -654,7 +623,7 @@
                     inset -3px 0 8px rgba(80, 210, 255, 0.34),
                     0 18px 42px rgba(0, 0, 0, 0.50),
                     0 0 20px rgba(var(--chrono-rgb, 82, 229, 155), 0.25);
-                transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.22s ease;
+                transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.16s ease;
                 position: relative;
             }
             .ios-action-orb::before {
@@ -666,11 +635,11 @@
                 pointer-events: none;
             }
             .ios-action-orb svg {
-                width: 25px;
-                height: 25px;
+                width: 26px;
+                height: 26px;
                 stroke: var(--chrono-pink);
                 fill: none;
-                stroke-width: 2.1;
+                stroke-width: 1.95;
                 stroke-linecap: round;
                 stroke-linejoin: round;
                 filter: drop-shadow(0 0 8px var(--chrono-pink-glow));
@@ -695,21 +664,21 @@
         const wrap = document.createElement('div');
         wrap.id = 'iosMobileUIContainer';
         wrap.innerHTML = `
-            <!-- Page 2: SCENES 水境場景選擇抽屜 -->
+            <!-- Page 2: 水域 (SCENES) 水境場景選擇抽屜 -->
             <div class="ios-page-sheet" data-page-sheet="scenes">
                 <div class="sheet-pill-handle"></div>
                 <div class="sheet-header">
-                    <span class="sheet-title">WATER ARCHIVES // 水境場景</span>
-                    <span class="sheet-badge">7 SCENES</span>
+                    <span class="sheet-title">WATER ARCHIVES // 八大水域</span>
+                    <span class="sheet-badge">8 MODES</span>
                 </div>
                 <div class="sheet-scene-list" id="mobileSceneList"></div>
             </div>
 
-            <!-- Page 3: CHRONO & SOLAR 時鐘與天象控制抽屜 -->
+            <!-- Page 3: 時晷 (CHRONO & SOLAR) 時鐘與天象控制抽屜 -->
             <div class="ios-page-sheet" data-page-sheet="chrono">
                 <div class="sheet-pill-handle"></div>
                 <div class="sheet-header">
-                    <span class="sheet-title">CHRONO &amp; SOLAR // 時鐘與天象</span>
+                    <span class="sheet-title">CHRONO &amp; SOLAR // 時晷與天象</span>
                     <span class="sheet-badge" id="mobileSolarBadge">SOLAR SYNC</span>
                 </div>
 
@@ -737,6 +706,10 @@
                 </div>
 
                 <div class="sheet-grid-2">
+                    <button type="button" class="lg-btn" id="mBtnToggleClockShow" style="grid-column: span 2;">
+                        <span>時鐘顯示開關</span>
+                        <span class="sub-tag" id="mClockShowTxt">OFF</span>
+                    </button>
                     <button type="button" class="lg-btn" id="mBtnCycleClock">
                         <span>錶盤樣式</span>
                         <span class="sub-tag" id="mClockFaceTxt">SIGNET</span>
@@ -756,11 +729,11 @@
                 </div>
             </div>
 
-            <!-- Page 4: ARCADE / LAB 生態互動、音效與光學調校抽屜 -->
+            <!-- Page 4: 生態 (ECOLOGY & LAB) 生態互動、水聲與光學調校抽屜 (純文字/符號標籤，無彩色Emoji) -->
             <div class="ios-page-sheet" data-page-sheet="lab">
                 <div class="sheet-pill-handle"></div>
                 <div class="sheet-header">
-                    <span class="sheet-title">ECOLOGY &amp; LAB // 生態與光學</span>
+                    <span class="sheet-title">ECOLOGY &amp; OPTICS // 生態與光學</span>
                     <span class="sheet-badge">FROST = 0</span>
                 </div>
 
@@ -773,13 +746,21 @@
                 </div>
 
                 <div class="sheet-grid-2">
+                    <button type="button" class="lg-btn active" id="mBtnWildlifeSfx">
+                        <span>魚蛙水花音效</span>
+                        <span class="sub-tag" id="mWildlifeSfxTxt">ON</span>
+                    </button>
+                    <button type="button" class="lg-btn" id="mBtnChirpToggle">
+                        <span>蟲鳥鳴叫開關</span>
+                        <span class="sub-tag" id="mChirpStateTxt">OFF</span>
+                    </button>
                     <button type="button" class="lg-btn" id="mBtnSpawnKoi">
                         <span>錦鯉躍水</span>
-                        <span class="sub-tag">KOI 🐟</span>
+                        <span class="sub-tag">LEAP ⤒</span>
                     </button>
                     <button type="button" class="lg-btn" id="mBtnTriggerEco">
                         <span>驚動生態</span>
-                        <span class="sub-tag">ECO 🐸</span>
+                        <span class="sub-tag">FAUNA ◈</span>
                     </button>
                     <button type="button" class="lg-btn active" id="mBtnAudioMute">
                         <span>環境水聲</span>
@@ -795,60 +776,66 @@
                     </button>
                     <button type="button" class="lg-btn" id="mBtnOpenGlassLab">
                         <span>光學調校面板</span>
-                        <span class="sub-tag">LAB ⚙</span>
+                        <span class="sub-tag">OPTICS ⊹</span>
                     </button>
                 </div>
             </div>
 
-            <!-- iOS 26 底部懸浮導航列 -->
-            <nav class="ios-bottom-dock" aria-label="iOS 26 Liquid Glass Navigation">
+            <!-- iOS 26 底部懸浮導航列 (專屬水境名稱：觀景 / 水域 / 時晷 / 生態 + 純單色極簡線條 SVG 圖示) -->
+            <nav class="ios-bottom-dock" aria-label="Hydro Chrono Liquid Glass Navigation">
                 <div class="ios-tab-capsule" id="iosTabTrack">
                     <!-- 在按鈕上方移動的高通透 + 周圍強折射橢圓形液態玻璃滑塊 -->
                     <div class="ios-sliding-pill" id="iosSlidingPill"></div>
 
+                    <!-- 1. 觀景 (VIEW)：極簡山水日輪與水面波紋線條 -->
                     <button type="button" class="ios-tab-item active" data-page="today">
                         <svg viewBox="0 0 24 24">
-                            <rect x="4" y="3" width="16" height="18" rx="3"></rect>
-                            <line x1="8" y1="8" x2="16" y2="8"></line>
-                            <rect x="8" y="12" width="8" height="5" rx="1"></rect>
+                            <circle cx="17.5" cy="6.5" r="2.5"></circle>
+                            <path d="M3 15.5l5.2-5.5 4.3 4.5 3.5-3.5 5 4.5"></path>
+                            <path d="M2 19.5c2.5-1.2 5-1.2 7.5 0s5 1.2 7.5 0 3.5-1.2 5 0"></path>
                         </svg>
-                        <span>Today</span>
+                        <span>觀景</span>
                     </button>
 
+                    <!-- 2. 水域 (SCENES)：三層流動水波紋線條 -->
                     <button type="button" class="ios-tab-item" data-page="scenes">
                         <svg viewBox="0 0 24 24">
-                            <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"></path>
-                            <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"></path>
-                            <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"></path>
-                            <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"></path>
+                            <path d="M2 7.5c2.5-1.8 5-1.8 7.5 0s5 1.8 7.5 0 3.5-1.8 5 0"></path>
+                            <path d="M2 12.5c2.5-1.8 5-1.8 7.5 0s5 1.8 7.5 0 3.5-1.8 5 0"></path>
+                            <path d="M2 17.5c2.5-1.8 5-1.8 7.5 0s5 1.8 7.5 0 3.5-1.8 5 0"></path>
                         </svg>
-                        <span>Scenes</span>
+                        <span>水域</span>
                     </button>
 
+                    <!-- 3. 時晷 (CHRONO)：精密日晷時鐘與日月軌道刻度 -->
                     <button type="button" class="ios-tab-item" data-page="chrono">
                         <svg viewBox="0 0 24 24">
-                            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-                            <polyline points="2 12 12 17 22 12"></polyline>
-                            <polyline points="2 17 12 22 22 17"></polyline>
+                            <circle cx="12" cy="12" r="8.5"></circle>
+                            <polyline points="12 7.5 12 12 15.2 13.8"></polyline>
+                            <line x1="12" y1="1.5" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="22.5"></line>
+                            <line x1="1.5" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="22.5" y2="12"></line>
                         </svg>
-                        <span>Apps</span>
+                        <span>時晷</span>
                     </button>
 
+                    <!-- 4. 生態 (ECOLOGY)：極簡流線游魚剪影線條 -->
                     <button type="button" class="ios-tab-item" data-page="lab">
                         <svg viewBox="0 0 24 24">
-                            <line x1="12" y1="3" x2="12" y2="12"></line>
-                            <circle cx="12" cy="3" r="1.5"></circle>
-                            <path d="M5 12h14l2 5-9 4-9-4 2-5z"></path>
+                            <path d="M2 12s4-6 10.5-6c4.2 0 7.5 6 7.5 6s-3.3 6-7.5 6C6 18 2 12 2 12z"></path>
+                            <path d="M20 12l3-3.5v7L20 12z"></path>
+                            <circle cx="15.5" cy="10.8" r="0.8" fill="currentColor"></circle>
                         </svg>
-                        <span>Arcade</span>
+                        <span>生態</span>
                     </button>
                 </div>
 
-                <!-- 右側獨立圓形液態玻璃按鈕 -->
-                <button type="button" class="ios-action-orb" id="iosActionOrb" title="觸發錦鯉躍水與生態互動">
+                <!-- 右側獨立圓形液態玻璃按鈕：水滴激起同心漣漪圖示 (點按瞬間躍魚+激起水波) -->
+                <button type="button" class="ios-action-orb" id="iosActionOrb" title="點按激起水波與錦鯉躍水">
                     <svg viewBox="0 0 24 24">
-                        <circle cx="11" cy="11" r="7"></circle>
-                        <line x1="16.5" y1="16.5" x2="21" y2="21"></line>
+                        <path d="M12 3.2c0 0-4.2 4.8-4.2 7.6a4.2 4.2 0 0 0 8.4 0C16.2 8 12 3.2 12 3.2z"></path>
+                        <path d="M4.5 17.5c1.8 1.9 4.5 3 7.5 3s5.7-1.1 7.5-3"></path>
                     </svg>
                 </button>
             </nav>
@@ -864,6 +851,7 @@
 
     let syncChronoSheetFn = null;
 
+    // 綁定零延遲觸控控制項 (固定按鈕使用 pointerdown 瞬發，滾動列表使用 Fast-Tap)
     function bindMobileControls() {
         const origSceneBtns = Array.from(document.querySelectorAll('#sceneListContainer .scene-item-btn'));
         const mSceneList = document.getElementById('mobileSceneList');
@@ -876,9 +864,21 @@
                 mb.type = 'button';
                 mb.className = 'lg-btn m-scene-btn' + (ob.classList.contains('active') ? ' active' : '');
                 mb.innerHTML = `<span>${title}</span><span class="sub-tag">0${idx + 1}</span>`;
-                mb.addEventListener('click', () => {
-                    ob.click();
-                    document.querySelectorAll('.m-scene-btn').forEach((b, k) => b.classList.toggle('active', k === idx));
+
+                // Fast-Tap: 手指按下記錄座標，抬起時若位移 < 8px 則立即切換場景，不等待慢速 click
+                let downX = 0, downY = 0;
+                mb.addEventListener('pointerdown', (e) => {
+                    downX = e.clientX;
+                    downY = e.clientY;
+                    mb.classList.remove('jelly-pop');
+                    void mb.offsetWidth;
+                    mb.classList.add('jelly-pop');
+                });
+                mb.addEventListener('pointerup', (e) => {
+                    if (Math.hypot(e.clientX - downX, e.clientY - downY) < 9) {
+                        ob.click();
+                        document.querySelectorAll('.m-scene-btn').forEach((b, k) => b.classList.toggle('active', k === idx));
+                    }
                 });
                 mSceneList.appendChild(mb);
             });
@@ -901,13 +901,19 @@
             }
         };
 
+        // 滑桿 RAF 合批節流：120Hz 觸控拖動時每幀最多更新一次
         if (origSolar && mSolar) {
             mSolar.value = origSolar.value;
+            let solarRaf = 0;
             mSolar.addEventListener('pointerdown', () => origSolar.dispatchEvent(new PointerEvent('pointerdown')));
             mSolar.addEventListener('input', () => {
-                origSolar.value = mSolar.value;
-                origSolar.dispatchEvent(new Event('input'));
-                if (origSolarTxt && mSolarTxt) mSolarTxt.textContent = origSolarTxt.textContent;
+                if (solarRaf) return;
+                solarRaf = requestAnimationFrame(() => {
+                    solarRaf = 0;
+                    origSolar.value = mSolar.value;
+                    origSolar.dispatchEvent(new Event('input'));
+                    if (origSolarTxt && mSolarTxt) mSolarTxt.textContent = origSolarTxt.textContent;
+                });
             });
         }
 
@@ -915,7 +921,11 @@
         if (mCycleGrid) {
             const mPills = mCycleGrid.querySelectorAll('.lg-pill-mini');
             mPills.forEach(mp => {
-                mp.addEventListener('click', () => {
+                mp.addEventListener('pointerdown', (e) => {
+                    e.preventDefault();
+                    mp.classList.remove('jelly-pop');
+                    void mp.offsetWidth;
+                    mp.classList.add('jelly-pop');
                     const sec = mp.getAttribute('data-sec');
                     const match = document.querySelector(`#cycleBtnGrid .chrono-cycle-btn[data-sec="${sec}"]`);
                     if (match) match.click();
@@ -928,36 +938,71 @@
         if (origScale && mScale) {
             mScale.value = origScale.value;
             if (mScaleTxt) mScaleTxt.textContent = parseFloat(origScale.value).toFixed(2) + '×';
+            let scaleRaf = 0;
             mScale.addEventListener('input', () => {
-                origScale.value = mScale.value;
-                origScale.dispatchEvent(new Event('input'));
-                if (mScaleTxt) mScaleTxt.textContent = parseFloat(mScale.value).toFixed(2) + '×';
+                if (scaleRaf) return;
+                scaleRaf = requestAnimationFrame(() => {
+                    scaleRaf = 0;
+                    origScale.value = mScale.value;
+                    origScale.dispatchEvent(new Event('input'));
+                    if (mScaleTxt) mScaleTxt.textContent = parseFloat(mScale.value).toFixed(2) + '×';
+                });
             });
         }
 
-        const proxyClick = (mId, origId, afterFn) => {
+        // 固定功能按鈕全部採用 pointerdown 瞬發觸發 (0ms 延遲)
+        const proxyInstant = (mId, origId, afterFn) => {
             const mb = document.getElementById(mId);
             const ob = document.getElementById(origId);
             if (mb && ob) {
-                mb.addEventListener('click', () => {
+                mb.addEventListener('pointerdown', (e) => {
+                    e.preventDefault();
+                    mb.classList.remove('jelly-pop');
+                    void mb.offsetWidth;
+                    mb.classList.add('jelly-pop');
                     ob.click();
                     if (afterFn) afterFn(mb, ob);
                 });
             }
         };
 
-        proxyClick('mBtnCycleClock', 'btnCycleClock', () => {
+        // 預設關閉時鐘 (加上 clock-hidden class)
+        let isClockVisible = false;
+        if (stage) stage.classList.add('clock-hidden');
+        const mClockShowBtn = document.getElementById('mBtnToggleClockShow');
+        const mClockShowTxt = document.getElementById('mClockShowTxt');
+        const setClockVisible = (v) => {
+            isClockVisible = !!v;
+            if (stage) stage.classList.toggle('clock-hidden', !isClockVisible);
+            if (mClockShowBtn) mClockShowBtn.classList.toggle('active', isClockVisible);
+            if (mClockShowTxt) mClockShowTxt.textContent = isClockVisible ? 'ON' : 'OFF';
+            if (isClockVisible) schedule();
+        };
+        if (mClockShowBtn) {
+            mClockShowBtn.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                mClockShowBtn.classList.remove('jelly-pop');
+                void mClockShowBtn.offsetWidth;
+                mClockShowBtn.classList.add('jelly-pop');
+                setClockVisible(!isClockVisible);
+            });
+        }
+
+        proxyInstant('mBtnCycleClock', 'btnCycleClock', () => {
+            if (!isClockVisible) setClockVisible(true);
             const lbl = document.getElementById('clockFaceTagMini');
             const mTxt = document.getElementById('mClockFaceTxt');
             if (lbl && mTxt) mTxt.textContent = lbl.textContent.replace(/^\d+\s*/, '');
         });
-        proxyClick('mBtnSolarSweep', 'btnSolarTransition');
-        proxyClick('mBtnGlassShape', 'btnCycleGlassShape', () => {
+        proxyInstant('mBtnSolarSweep', 'btnSolarTransition');
+        proxyInstant('mBtnGlassShape', 'btnCycleGlassShape', () => {
+            if (!isClockVisible) setClockVisible(true);
             const lbl = document.getElementById('glassShapeLabel');
             const mTxt = document.getElementById('mGlassShapeTxt');
             if (lbl && mTxt) mTxt.textContent = lbl.textContent.replace('SHAPE: ', '').split(' ')[0];
         });
-        proxyClick('mBtnResetClock', 'btnResetClockPos', () => {
+        proxyInstant('mBtnResetClock', 'btnResetClockPos', () => {
+            if (!isClockVisible) setClockVisible(true);
             if (syncChronoSheetFn) syncChronoSheetFn();
         });
 
@@ -966,28 +1011,77 @@
         const mVolTxt = document.getElementById('mobileVolumeTxt');
         if (origVol && mVol) {
             mVol.value = origVol.value;
+            let volRaf = 0;
             mVol.addEventListener('input', () => {
-                origVol.value = mVol.value;
-                origVol.dispatchEvent(new Event('input'));
-                if (mVolTxt) mVolTxt.textContent = Math.round(mVol.value * 100) + '%';
+                if (volRaf) return;
+                volRaf = requestAnimationFrame(() => {
+                    volRaf = 0;
+                    origVol.value = mVol.value;
+                    origVol.dispatchEvent(new Event('input'));
+                    if (mVolTxt) mVolTxt.textContent = Math.round(mVol.value * 100) + '%';
+                });
             });
         }
 
-        proxyClick('mBtnSpawnKoi', 'btnSpawnFish');
-        proxyClick('mBtnTriggerEco', 'btnTriggerEco');
-        proxyClick('mBtnAudioMute', 'btnAudioToggle', (mb) => {
+        const mSfxBtn = document.getElementById('mBtnWildlifeSfx');
+        const mSfxTxt = document.getElementById('mWildlifeSfxTxt');
+        if (mSfxBtn) {
+            const syncSfxBtn = (on) => {
+                mSfxBtn.classList.toggle('active', !!on);
+                if (mSfxTxt) mSfxTxt.textContent = on ? 'ON' : 'OFF';
+            };
+            if (window.HydroAudio && window.HydroAudio.isSfxEnabled) {
+                syncSfxBtn(window.HydroAudio.isSfxEnabled());
+            }
+            mSfxBtn.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                mSfxBtn.classList.remove('jelly-pop');
+                void mSfxBtn.offsetWidth;
+                mSfxBtn.classList.add('jelly-pop');
+                if (window.HydroAudio && window.HydroAudio.toggleSfx) {
+                    const nextOn = window.HydroAudio.toggleSfx();
+                    syncSfxBtn(nextOn);
+                }
+            });
+        }
+
+        const mChirpBtn = document.getElementById('mBtnChirpToggle');
+        const mChirpTxt = document.getElementById('mChirpStateTxt');
+        if (mChirpBtn) {
+            const syncChirpBtn = (on) => {
+                mChirpBtn.classList.toggle('active', !!on);
+                if (mChirpTxt) mChirpTxt.textContent = on ? 'ON' : 'OFF';
+            };
+            if (window.HydroAudio && window.HydroAudio.isChirpEnabled) {
+                syncChirpBtn(window.HydroAudio.isChirpEnabled());
+            }
+            mChirpBtn.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                mChirpBtn.classList.remove('jelly-pop');
+                void mChirpBtn.offsetWidth;
+                mChirpBtn.classList.add('jelly-pop');
+                if (window.HydroAudio && window.HydroAudio.toggleChirp) {
+                    const nextOn = window.HydroAudio.toggleChirp();
+                    syncChirpBtn(nextOn);
+                }
+            });
+        }
+
+        proxyInstant('mBtnSpawnKoi', 'btnSpawnFish');
+        proxyInstant('mBtnTriggerEco', 'btnTriggerEco');
+        proxyInstant('mBtnAudioMute', 'btnAudioToggle', (mb) => {
             const lbl = document.getElementById('audioLabel');
             const mTxt = document.getElementById('mAudioStateTxt');
             const playing = lbl && lbl.textContent.includes('PLAYING');
             mb.classList.toggle('active', !!playing);
             if (mTxt) mTxt.textContent = playing ? 'PLAYING' : 'MUTED';
         });
-        proxyClick('mBtnWaveSpeed', 'btnSpeedToggle', () => {
+        proxyInstant('mBtnWaveSpeed', 'btnSpeedToggle', () => {
             const lbl = document.getElementById('speedLabel');
             const mTxt = document.getElementById('mSpeedStateTxt');
             if (lbl && mTxt) mTxt.textContent = lbl.textContent.replace('SPEED: ', '');
         });
-        proxyClick('mBtnToggleGlass', 'btnToggleGlassBlur', (mb, ob) => {
+        proxyInstant('mBtnToggleGlass', 'btnToggleGlassBlur', (mb, ob) => {
             const on = ob.classList.contains('active');
             mb.classList.toggle('active', on);
             const mTxt = document.getElementById('mGlassOnTxt');
@@ -996,13 +1090,17 @@
 
         const mLabBtn = document.getElementById('mBtnOpenGlassLab');
         if (mLabBtn) {
-            mLabBtn.addEventListener('click', () => {
+            mLabBtn.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                mLabBtn.classList.remove('jelly-pop');
+                void mLabBtn.offsetWidth;
+                mLabBtn.classList.add('jelly-pop');
                 toggle();
             });
         }
     }
 
-    // 二階欠阻尼彈簧物理：純 GPU transform 驅動，不在每幀修改 SVG DOM 屬性
+    // 高剛性二階欠阻尼彈簧物理 + 手指拖曳直接跟手耦合 (Direct Finger Tracking)
     function initMobileTabBarPhysics() {
         const track = document.getElementById('iosTabTrack');
         const indicator = document.getElementById('iosSlidingPill');
@@ -1024,6 +1122,8 @@
         let lastTime = 0;
         let isDraggingTab = false;
         let tabCenters = [];
+        let minTrackX = 5;
+        let maxTrackX = 240;
 
         function cacheTabMetrics() {
             const tRect = track.getBoundingClientRect();
@@ -1035,8 +1135,10 @@
                     cx: (bRect.left - tRect.left) + bRect.width / 2
                 };
             });
-            if (tabCenters[activeIndex]) {
-                pillWidth = tabCenters[activeIndex].w;
+            if (tabCenters.length) {
+                pillWidth = tabCenters[0].w;
+                minTrackX = tabCenters[0].x;
+                maxTrackX = tabCenters[tabCenters.length - 1].x;
                 indicator.style.width = pillWidth.toFixed(1) + 'px';
             }
         }
@@ -1064,15 +1166,16 @@
             if (!immediate && prevIdx !== activeIndex && !fromDrag) {
                 const dir = targetX > currentX ? 1 : -1;
                 const dist = Math.abs(targetX - currentX);
-                velocityX += dir * Math.min(540, 165 + dist * 1.75);
-                pressSquish = 0.24;
+                // 瞬發初速度脈衝：點擊第一幀立刻彈射並產生明顯水滴拉伸
+                velocityX += dir * Math.min(720, 240 + dist * 2.2);
+                pressSquish = 0.26;
             } else if (!immediate && prevIdx === activeIndex && !fromDrag) {
                 if (pageId !== 'today') {
                     const targetSheet = sheets.find(sh => sh.getAttribute('data-page-sheet') === pageId);
                     if (targetSheet) targetSheet.classList.toggle('open');
                 }
-                velocityX += (Math.random() > 0.5 ? 1 : -1) * 110;
-                pressSquish = 0.28;
+                velocityX += (Math.random() > 0.5 ? 1 : -1) * 140;
+                pressSquish = 0.30;
             }
 
             if (immediate) {
@@ -1092,28 +1195,30 @@
         }
 
         function stepPhysics(now) {
-            const dt = Math.min(0.032, Math.max(0.004, (now - lastTime) / 1000));
+            const dt = Math.min(0.028, Math.max(0.004, (now - lastTime) / 1000));
             lastTime = now;
 
-            const stiffness = 285;
-            const damping = 17.5;
+            // 高剛性二階欠阻尼彈簧 (stiffness=460, damping=24)：起步反應快 60%，且保留一次乾淨俐落的 Q 彈果凍回彈
+            const stiffness = isDraggingTab ? 680 : 460;
+            const damping = isDraggingTab ? 34 : 24;
             const displacement = currentX - targetX;
             const accel = -stiffness * displacement - damping * velocityX;
 
             velocityX += accel * dt;
             currentX += velocityX * dt;
-            pressSquish += (targetPressSquish - pressSquish) * Math.min(1, dt * 12);
+            pressSquish += (targetPressSquish - pressSquish) * Math.min(1, dt * 15);
 
-            const speedNorm = clamp(Math.abs(velocityX) / 820, 0, 0.46);
-            const brakeSquash = clamp(-displacement * Math.sign(velocityX || 1) * 0.0026, -0.14, 0.14);
-            const stretch = speedNorm * 0.92 + brakeSquash + pressSquish * 0.20;
+            const speedNorm = clamp(Math.abs(velocityX) / 880, 0, 0.48);
+            const brakeSquash = clamp(-displacement * Math.sign(velocityX || 1) * 0.003, -0.15, 0.15);
+            const stretch = speedNorm * 0.95 + brakeSquash + pressSquish * 0.22;
 
-            scaleX = clamp(1 + stretch, 0.82, 1.42);
-            scaleY = clamp((1 / Math.pow(scaleX, 0.76)) + pressSquish * 0.06, 0.72, 1.20);
+            scaleX = clamp(1 + stretch, 0.80, 1.44);
+            scaleY = clamp((1 / Math.pow(scaleX, 0.76)) + pressSquish * 0.06, 0.70, 1.22);
 
             renderIndicator();
 
             const stillMoving =
+                isDraggingTab ||
                 Math.abs(displacement) > 0.12 ||
                 Math.abs(velocityX) > 1.0 ||
                 Math.abs(scaleX - 1) > 0.0025 ||
@@ -1138,22 +1243,27 @@
             }
         }
 
+        let trackLeft = 0;
         tabs.forEach((btn, idx) => {
             btn.addEventListener('pointerdown', (e) => {
                 e.stopPropagation();
-                targetPressSquish = 0.22;
+                if (!tabCenters.length) cacheTabMetrics();
+                trackLeft = track.getBoundingClientRect().left;
+                isDraggingTab = true;
+                targetPressSquish = 0.24;
                 setPage(idx, false, false);
             });
         });
 
-        let trackLeft = 0;
-        track.addEventListener('pointerdown', () => {
-            isDraggingTab = true;
+        track.addEventListener('pointerdown', (e) => {
+            if (!tabCenters.length) cacheTabMetrics();
             trackLeft = track.getBoundingClientRect().left;
+            isDraggingTab = true;
             targetPressSquish = 0.24;
             startLoop();
         });
 
+        // 手指在導航列滑動時：橢圓玻璃滑塊直接跟手平滑位移，並在經過按鈕時即時切換分頁
         window.addEventListener('pointermove', (e) => {
             if (!isDraggingTab || !tabCenters.length) return;
             const relX = e.clientX - trackLeft;
@@ -1166,12 +1276,20 @@
             if (bestIdx !== activeIndex) {
                 setPage(bestIdx, false, true);
             }
-        });
+            // 讓目標位置混合手指座標與吸附點，實現 0 延遲跟手拖拽感
+            const fingerX = clamp(relX - pillWidth / 2, minTrackX - 6, maxTrackX + 6);
+            const snapX = tabCenters[activeIndex].x;
+            targetX = snapX * 0.45 + fingerX * 0.55;
+            startLoop();
+        }, { passive: true });
 
         const endPointer = () => {
             if (targetPressSquish !== 0 || isDraggingTab) {
                 isDraggingTab = false;
                 targetPressSquish = 0;
+                if (tabCenters[activeIndex]) {
+                    targetX = tabCenters[activeIndex].x;
+                }
                 startLoop();
             }
         };
@@ -1190,9 +1308,11 @@
             });
         }
 
+        // 右側獨立圓形水滴玻璃按鈕：pointerdown 零延遲瞬發躍魚與生態互動
         if (actionOrb) {
-            actionOrb.addEventListener('click', (e) => {
+            actionOrb.addEventListener('pointerdown', (e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 actionOrb.classList.remove('jelly-pop');
                 void actionOrb.offsetWidth;
                 actionOrb.classList.add('jelly-pop');
@@ -1202,14 +1322,6 @@
                 if (ecoBtn) ecoBtn.click();
             });
         }
-
-        document.querySelectorAll('.lg-btn, .lg-pill-mini').forEach(btn => {
-            btn.addEventListener('pointerdown', () => {
-                btn.classList.remove('jelly-pop');
-                void btn.offsetWidth;
-                btn.classList.add('jelly-pop');
-            });
-        });
 
         window.addEventListener('resize', () => {
             cacheTabMetrics();
